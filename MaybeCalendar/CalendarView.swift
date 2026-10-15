@@ -3,28 +3,28 @@ import SwiftUI
 struct CalendarView: View {
     @Environment(Store.self) private var store
     @Binding var selectedDay: Date
+    /// When set, the timeline scrolls to this time (e.g. right after saving an event).
+    @Binding var focusDate: Date?
     @State private var editor: EditorRequest?
+    @State private var confirmCount = 0
 
     var body: some View {
-        @Bindable var store = store
-        let hiddenCount = store.showPotential ? 0
-            : store.events(on: selectedDay, includePotential: true).filter { $0.status == .potential }.count
+        let dayEvents = store.events(on: selectedDay, includePotential: true)
+        let visibleEvents = dayEvents.filter { store.showPotential || $0.status == .confirmed }
+        let hiddenCount = dayEvents.count - visibleEvents.count
 
         NavigationStack {
             VStack(spacing: 0) {
                 WeekStrip(selectedDay: $selectedDay)
 
                 HStack {
-                    Text(selectedDay.formatted(.dateTime.weekday(.wide).month(.wide).day()))
+                    Text(selectedDay.formatted(.dateTime.weekday(.abbreviated).month(.abbreviated).day()))
                         .font(.subheadline.bold())
+                        .lineLimit(1)
                     Spacer()
-                    Toggle(isOn: $store.showPotential) {
-                        Text(hiddenCount > 0 ? "Potential (\(hiddenCount) hidden)" : "Potential")
-                            .font(.subheadline)
-                            .foregroundStyle(.secondary)
+                    PotentialLayerButton(isShowing: store.showPotential, hiddenCount: hiddenCount) {
+                        withAnimation { store.showPotential.toggle() }
                     }
-                    .fixedSize()
-                    .accessibilityLabel("Show potential plans")
                 }
                 .padding(.horizontal)
                 .padding(.vertical, 8)
@@ -33,19 +33,40 @@ struct CalendarView: View {
 
                 DayTimeline(
                     day: selectedDay,
-                    events: store.events(on: selectedDay, includePotential: store.showPotential),
+                    events: visibleEvents,
+                    focusDate: $focusDate,
                     onTapHour: { hour in editor = .new(day: selectedDay, hour: hour) },
                     onTapEvent: { editor = .edit($0) },
                     onConfirm: { event in
                         withAnimation { store.confirm(event.id) }
+                        confirmCount += 1
                     }
                 )
+                .overlay(alignment: .top) {
+                    if visibleEvents.isEmpty {
+                        Text(hiddenCount > 0
+                             ? "Potential plans are hidden. Tap the eye button to show them."
+                             : "No plans yet. Tap an hour or + to add one.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                            .multilineTextAlignment(.center)
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 8)
+                            .background(.regularMaterial, in: Capsule())
+                            .padding(.top, 12)
+                            .padding(.horizontal)
+                            .allowsHitTesting(false)
+                    }
+                }
             }
             .navigationTitle(selectedDay.formatted(.dateTime.month(.wide).year()))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
-                    Button("Today") { selectedDay = .now }
+                    Button("Today") {
+                        selectedDay = .now
+                        focusDate = .now
+                    }
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button {
@@ -57,9 +78,39 @@ struct CalendarView: View {
                 }
             }
             .sheet(item: $editor) { request in
-                EventEditorView(request: request) { savedDate in selectedDay = savedDate }
+                EventEditorView(request: request) { savedDate in
+                    selectedDay = savedDate
+                    focusDate = savedDate
+                }
             }
+            .sensoryFeedback(.success, trigger: confirmCount)
         }
+    }
+}
+
+/// Shows or hides the potential-plans layer.
+struct PotentialLayerButton: View {
+    let isShowing: Bool
+    let hiddenCount: Int
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Label {
+                Text(isShowing ? "Potential shown"
+                     : hiddenCount > 0 ? "\(hiddenCount) potential hidden" : "Potential hidden")
+            } icon: {
+                Image(systemName: isShowing ? "eye" : "eye.slash")
+            }
+            .font(.subheadline)
+            .lineLimit(1)
+        }
+        .buttonStyle(.bordered)
+        .buttonBorderShape(.capsule)
+        .controlSize(.small)
+        .tint(isShowing ? .accentColor : .gray)
+        .accessibilityLabel("Show potential plans")
+        .accessibilityValue(isShowing ? "On" : "Off")
     }
 }
 
@@ -77,21 +128,26 @@ struct WeekStrip: View {
 
     var body: some View {
         HStack(spacing: 0) {
-            Button { shiftWeek(-1) } label: { Image(systemName: "chevron.left") }
-                .padding(.horizontal, 8)
-                .accessibilityLabel("Previous week")
+            Button { shiftWeek(-1) } label: {
+                Image(systemName: "chevron.left").frame(width: 32, height: 44)
+            }
+            .accessibilityLabel("Previous week")
 
             ForEach(days, id: \.self) { day in
                 dayCell(day)
                     .frame(maxWidth: .infinity)
                     .contentShape(Rectangle())
                     .onTapGesture { selectedDay = day }
+                    .accessibilityElement(children: .combine)
+                    .accessibilityAddTraits(.isButton)
             }
 
-            Button { shiftWeek(1) } label: { Image(systemName: "chevron.right") }
-                .padding(.horizontal, 8)
-                .accessibilityLabel("Next week")
+            Button { shiftWeek(1) } label: {
+                Image(systemName: "chevron.right").frame(width: 32, height: 44)
+            }
+            .accessibilityLabel("Next week")
         }
+        .padding(.horizontal, 4)
         .padding(.vertical, 8)
         .gesture(
             DragGesture(minimumDistance: 30).onEnded { value in
@@ -119,9 +175,14 @@ struct WeekStrip: View {
                 .frame(width: 32, height: 32)
                 .background(Circle().fill(isSelected ? Color.accentColor : .clear))
             HStack(spacing: 3) {
-                Circle().fill(Color.accentColor).frame(width: 5, height: 5).opacity(hasConfirmed ? 1 : 0)
-                Circle().strokeBorder(Color.accentColor, lineWidth: 1).frame(width: 6, height: 6).opacity(hasPotential ? 1 : 0)
+                if hasConfirmed {
+                    Circle().fill(Color.accentColor).frame(width: 6, height: 6)
+                }
+                if hasPotential {
+                    Circle().strokeBorder(Color.accentColor, lineWidth: 1).frame(width: 6, height: 6)
+                }
             }
+            .frame(height: 6)
         }
     }
 
@@ -135,9 +196,12 @@ struct WeekStrip: View {
 struct DayTimeline: View {
     let day: Date
     let events: [PlanEvent]
+    @Binding var focusDate: Date?
     let onTapHour: (Int) -> Void
     let onTapEvent: (PlanEvent) -> Void
     let onConfirm: (PlanEvent) -> Void
+
+    @State private var didInitialScroll = false
 
     private let hourHeight: CGFloat = 60
     private let labelWidth: CGFloat = 52
@@ -153,7 +217,47 @@ struct DayTimeline: View {
                 .frame(height: hourHeight * 24)
                 .padding(.vertical, 8)
             }
-            .onAppear { proxy.scrollTo(7, anchor: .top) }
+            .onAppear {
+                if let focusDate {
+                    scroll(proxy, toHour: hour(of: focusDate))
+                    self.focusDate = nil
+                } else if !didInitialScroll {
+                    scroll(proxy, toHour: defaultHour, animated: false)
+                }
+                didInitialScroll = true
+            }
+            .onChange(of: focusDate) { _, newValue in
+                guard let newValue else { return }
+                scroll(proxy, toHour: hour(of: newValue))
+                focusDate = nil
+            }
+            .onChange(of: Calendar.current.startOfDay(for: day)) {
+                // A save that changes the day also sets focusDate; let that win.
+                guard focusDate == nil else { return }
+                scroll(proxy, toHour: defaultHour)
+            }
+        }
+    }
+
+    /// Where to start when opening a day: just before now if it's today,
+    /// otherwise just before the first event, otherwise 8am.
+    private var defaultHour: Int {
+        if Calendar.current.isDateInToday(day) { return hour(of: .now) }
+        if let first = events.first { return hour(of: first.start) }
+        return 8
+    }
+
+    private func hour(of date: Date) -> Int {
+        Calendar.current.component(.hour, from: date)
+    }
+
+    private func scroll(_ proxy: ScrollViewProxy, toHour hour: Int, animated: Bool = true) {
+        // Show the hour before as context, and leave room so the hour label isn't clipped.
+        let target = max(hour - 1, 0)
+        if animated {
+            withAnimation { proxy.scrollTo(target, anchor: UnitPoint(x: 0, y: 0.05)) }
+        } else {
+            proxy.scrollTo(target, anchor: UnitPoint(x: 0, y: 0.05))
         }
     }
 
@@ -166,11 +270,14 @@ struct DayTimeline: View {
                         .foregroundStyle(.secondary)
                         .frame(width: labelWidth - 4, alignment: .trailing)
                         .offset(y: -6)
-                    VStack { Divider() ; Spacer() }
+                    VStack { Divider(); Spacer() }
                 }
                 .frame(height: hourHeight)
                 .contentShape(Rectangle())
                 .onTapGesture { onTapHour(hour) }
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel("Add event at \(hourLabel(hour).isEmpty ? "midnight" : hourLabel(hour))")
+                .accessibilityAddTraits(.isButton)
                 .id(hour)
             }
         }
@@ -187,6 +294,7 @@ struct DayTimeline: View {
                     .frame(width: laneWidth - 3, height: max(bottom - top - 2, 26))
                     .offset(x: labelWidth + laneWidth * CGFloat(placed.lane), y: top)
                     .onTapGesture { onTapEvent(placed.event) }
+                    .accessibilityAction(named: "Edit") { onTapEvent(placed.event) }
             }
         }
     }
@@ -200,6 +308,7 @@ struct DayTimeline: View {
         .padding(.leading, labelWidth - 4)
         .offset(y: y - 4)
         .allowsHitTesting(false)
+        .accessibilityHidden(true)
     }
 
     private func hourLabel(_ hour: Int) -> String {
@@ -241,9 +350,10 @@ struct EventBlock: View {
                         .font(.title3)
                         .foregroundStyle(Color.accentColor)
                         .background(Circle().fill(.white))
+                        .padding(3)
+                        .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .padding(3)
                 .accessibilityLabel("Confirm \(event.title)")
             }
         }
@@ -259,6 +369,7 @@ struct EventBlock: View {
         .contentShape(RoundedRectangle(cornerRadius: 6))
         .accessibilityElement(children: .contain)
         .accessibilityLabel("\(event.title), \(event.status.label)")
+        .accessibilityAddTraits(.isButton)
     }
 }
 

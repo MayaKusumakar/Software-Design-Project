@@ -28,13 +28,14 @@ struct ContentView: View {
     @Environment(Store.self) private var store
     @State private var tab = AppTab.calendar
     @State private var selectedDay = Date.now
+    @State private var focusDate: Date?
 
     var body: some View {
         TabView(selection: $tab) {
-            CalendarView(selectedDay: $selectedDay)
+            CalendarView(selectedDay: $selectedDay, focusDate: $focusDate)
                 .tabItem { Label("Calendar", systemImage: "calendar") }
                 .tag(AppTab.calendar)
-            IdeasView(selectedDay: $selectedDay, tab: $tab)
+            IdeasView(selectedDay: $selectedDay, focusDate: $focusDate, tab: $tab)
                 .tabItem { Label("Ideas", systemImage: "lightbulb") }
                 .tag(AppTab.ideas)
                 .badge(store.ideas.count)

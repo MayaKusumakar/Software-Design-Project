@@ -43,6 +43,7 @@ struct EventEditorView: View {
     @State private var notes: String
     @State private var keepIdea = false
     @State private var confirmingDelete = false
+    @FocusState private var titleFocused: Bool
 
     init(request: EditorRequest, onSaved: @escaping (Date) -> Void = { _ in }) {
         self.request = request
@@ -70,6 +71,8 @@ struct EventEditorView: View {
             Form {
                 Section {
                     TextField("Title", text: $title)
+                        .focused($titleFocused)
+                        .submitLabel(.done)
                 }
 
                 Section {
@@ -122,6 +125,12 @@ struct EventEditorView: View {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Save", action: save).disabled(!canSave)
                 }
+            }
+            .task {
+                // Open the keyboard right away for a brand-new, untitled event.
+                guard request.isNew, title.isEmpty else { return }
+                try? await Task.sleep(for: .milliseconds(450))
+                titleFocused = true
             }
             .confirmationDialog("Delete this event?", isPresented: $confirmingDelete, titleVisibility: .visible) {
                 Button("Delete", role: .destructive) {

@@ -3,6 +3,7 @@ import SwiftUI
 struct IdeasView: View {
     @Environment(Store.self) private var store
     @Binding var selectedDay: Date
+    @Binding var focusDate: Date?
     @Binding var tab: AppTab
 
     @State private var newIdea = ""
@@ -56,6 +57,7 @@ struct IdeasView: View {
             .sheet(item: $editor) { request in
                 EventEditorView(request: request) { savedDate in
                     selectedDay = savedDate
+                    focusDate = savedDate
                     tab = .calendar
                 }
             }
