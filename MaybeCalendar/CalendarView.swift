@@ -5,59 +5,23 @@ struct CalendarView: View {
     @Binding var selectedDay: Date
     /// When set, the timeline scrolls to this time (e.g. right after saving an event).
     @Binding var focusDate: Date?
+    /// Opens the Ideas tab, ready to type a new idea.
+    var onAddIdea: () -> Void = {}
     @State private var editor: EditorRequest?
+    @State private var ideaToEdit: Idea?
     @State private var confirmCount = 0
+    /// The free gap whose suggestion the card shows, identified by the gap's end time.
+    @State private var pickedGap: Date?
+    /// "Another idea" taps per gap.
+    @State private var alternateOffsets: [Date: Int] = [:]
+    @AppStorage("suggestionsCollapsed") private var suggestionsCollapsed = false
+    @AppStorage("ideasInviteDismissed") private var inviteDismissed = false
 
     var body: some View {
-        let dayEvents = store.events(on: selectedDay, includePotential: true)
-        let visibleEvents = dayEvents.filter { store.showPotential || $0.status == .confirmed }
-        let hiddenCount = dayEvents.count - visibleEvents.count
-
         NavigationStack {
-            VStack(spacing: 0) {
-                WeekStrip(selectedDay: $selectedDay)
-
-                HStack {
-                    Text(selectedDay.formatted(.dateTime.weekday(.abbreviated).month(.abbreviated).day()))
-                        .font(.subheadline.bold())
-                        .lineLimit(1)
-                    Spacer()
-                    PotentialLayerButton(isShowing: store.showPotential, hiddenCount: hiddenCount) {
-                        withAnimation { store.showPotential.toggle() }
-                    }
-                }
-                .padding(.horizontal)
-                .padding(.vertical, 8)
-
-                Divider()
-
-                DayTimeline(
-                    day: selectedDay,
-                    events: visibleEvents,
-                    focusDate: $focusDate,
-                    onTapHour: { hour in editor = .new(day: selectedDay, hour: hour) },
-                    onTapEvent: { editor = .edit($0) },
-                    onConfirm: { event in
-                        withAnimation { store.confirm(event.id) }
-                        confirmCount += 1
-                    }
-                )
-                .overlay(alignment: .top) {
-                    if visibleEvents.isEmpty {
-                        Text(hiddenCount > 0
-                             ? "Potential plans are hidden. Tap the eye button to show them."
-                             : "No plans yet. Tap an hour or + to add one.")
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-                            .multilineTextAlignment(.center)
-                            .padding(.horizontal, 14)
-                            .padding(.vertical, 8)
-                            .background(.regularMaterial, in: Capsule())
-                            .padding(.top, 12)
-                            .padding(.horizontal)
-                            .allowsHitTesting(false)
-                    }
-                }
+            // Re-check once a minute so suggestions never start in the past.
+            TimelineView(.everyMinute) { context in
+                dayView(now: context.date)
             }
             .navigationTitle(selectedDay.formatted(.dateTime.month(.wide).year()))
             .navigationBarTitleDisplayMode(.inline)
@@ -83,8 +47,124 @@ struct CalendarView: View {
                     focusDate = savedDate
                 }
             }
+            .sheet(item: $ideaToEdit) { idea in
+                IdeaEditorView(idea: idea)
+            }
             .sensoryFeedback(.success, trigger: confirmCount)
+            .onChange(of: Calendar.current.startOfDay(for: selectedDay)) {
+                pickedGap = nil
+                alternateOffsets = [:]
+            }
         }
+    }
+
+    @ViewBuilder
+    private func dayView(now: Date) -> some View {
+        let dayEvents = store.events(on: selectedDay, includePotential: true)
+        let visibleEvents = dayEvents.filter { store.showPotential || $0.status == .confirmed }
+        let hiddenCount = dayEvents.count - visibleEvents.count
+        let shown = SuggestionEngine.shown(store.suggestions(for: selectedDay, now: now), offsets: alternateOffsets)
+        // The card starts on the day's strongest suggestion; tapping another outline switches to it.
+        let current = shown.first { $0.id == pickedGap } ?? shown.max { $0.suggestion.score < $1.suggestion.score }
+
+        VStack(spacing: 0) {
+            WeekStrip(selectedDay: $selectedDay)
+
+            HStack {
+                Text(selectedDay.formatted(.dateTime.weekday(.abbreviated).month(.abbreviated).day()))
+                    .font(.subheadline.bold())
+                    .lineLimit(1)
+                Spacer()
+                PotentialLayerButton(isShowing: store.showPotential, hiddenCount: hiddenCount) {
+                    withAnimation { store.showPotential.toggle() }
+                }
+            }
+            .padding(.horizontal)
+            .padding(.vertical, 8)
+
+            Divider()
+
+            DayTimeline(
+                day: selectedDay,
+                events: visibleEvents,
+                focusDate: $focusDate,
+                onTapHour: { hour in editor = .new(day: selectedDay, hour: hour) },
+                onTapEvent: { editor = .edit($0) },
+                onConfirm: { event in
+                    withAnimation { store.confirm(event.id) }
+                    confirmCount += 1
+                },
+                suggestions: suggestionsCollapsed ? [] : shown,
+                selectedSuggestion: current?.id,
+                onTapSuggestion: { tapped in
+                    withAnimation(.snappy) { pickedGap = tapped.id }
+                }
+            )
+            .overlay(alignment: .top) {
+                if visibleEvents.isEmpty {
+                    Text(hiddenCount > 0
+                         ? "Potential plans are hidden. Tap the eye button to show them."
+                         : "No plans yet. Tap an hour or + to add one.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 8)
+                        .background(.regularMaterial, in: Capsule())
+                        .padding(.top, 12)
+                        .padding(.horizontal)
+                        .allowsHitTesting(false)
+                }
+            }
+            .safeAreaInset(edge: .bottom) {
+                suggestionArea(shown: shown, current: current, now: now)
+                    .padding(.horizontal)
+                    .padding(.bottom, 8)
+                    .animation(.snappy, value: current?.suggestion.id)
+                    .animation(.snappy, value: suggestionsCollapsed)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func suggestionArea(shown: [SuggestionEngine.Shown], current: SuggestionEngine.Shown?, now: Date) -> some View {
+        if let current {
+            if suggestionsCollapsed {
+                SuggestionPill(count: shown.count) { suggestionsCollapsed = false }
+                    .transition(.opacity)
+            } else {
+                SuggestionCard(
+                    shown: current,
+                    onAdd: { editor = .suggested(current.suggestion) },
+                    onAnother: {
+                        withAnimation(.snappy) { alternateOffsets[current.id, default: 0] += 1 }
+                    },
+                    onNotNow: {
+                        withAnimation(.snappy) { store.recordDismissed(current.suggestion.key) }
+                    },
+                    onOpen: current.suggestion.ideaID
+                        .flatMap { id in store.ideas.first { $0.id == id } }
+                        .map { idea in { ideaToEdit = idea } },
+                    onCollapse: { suggestionsCollapsed = true }
+                )
+                .id(current.suggestion.id)
+                .transition(.opacity.combined(with: .move(edge: .bottom)))
+            }
+        } else if showsIdeasInvite(now: now) {
+            IdeasInviteCard(onAddIdea: onAddIdea) {
+                withAnimation { inviteDismissed = true }
+            }
+            .transition(.opacity.combined(with: .move(edge: .bottom)))
+        }
+    }
+
+    /// Nothing to suggest from yet, but there is free time to fill. Never shown for a day
+    /// that's already full or over.
+    private func showsIdeasInvite(now: Date) -> Bool {
+        !inviteDismissed
+            && store.ideas.isEmpty
+            && SuggestionEngine.habits(from: store.events, now: now).isEmpty
+            && !SuggestionEngine.freeSlots(on: selectedDay, events: store.events, now: now).isEmpty
     }
 }
 
@@ -200,6 +280,9 @@ struct DayTimeline: View {
     let onTapHour: (Int) -> Void
     let onTapEvent: (PlanEvent) -> Void
     let onConfirm: (PlanEvent) -> Void
+    var suggestions: [SuggestionEngine.Shown] = []
+    var selectedSuggestion: Date?
+    var onTapSuggestion: (SuggestionEngine.Shown) -> Void = { _ in }
 
     @State private var didInitialScroll = false
 
@@ -211,6 +294,7 @@ struct DayTimeline: View {
             ScrollView {
                 ZStack(alignment: .topLeading) {
                     hourGrid
+                    suggestionsLayer
                     eventsLayer
                     if Calendar.current.isDateInToday(day) { nowLine }
                 }
@@ -295,6 +379,24 @@ struct DayTimeline: View {
                     .offset(x: labelWidth + laneWidth * CGFloat(placed.lane), y: top)
                     .onTapGesture { onTapEvent(placed.event) }
                     .accessibilityAction(named: "Edit") { onTapEvent(placed.event) }
+            }
+        }
+    }
+
+    private var suggestionsLayer: some View {
+        GeometryReader { geo in
+            let columnWidth = geo.size.width - labelWidth - 8
+            ForEach(suggestions) { shown in
+                let top = minutesIntoDay(shown.suggestion.start) / 60 * hourHeight
+                let bottom = minutesIntoDay(shown.suggestion.end) / 60 * hourHeight
+                SuggestionGhost(suggestion: shown.suggestion, isSelected: shown.id == selectedSuggestion)
+                    .frame(width: columnWidth - 3, height: max(bottom - top - 2, 22))
+                    .offset(x: labelWidth, y: top)
+                    .onTapGesture { onTapSuggestion(shown) }
+                    // The card already shows the selected one, so taps on it reach the hour
+                    // underneath (to add a plan there) instead.
+                    .allowsHitTesting(shown.id != selectedSuggestion)
+                    .transition(.opacity)
             }
         }
     }

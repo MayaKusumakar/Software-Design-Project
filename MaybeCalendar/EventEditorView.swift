@@ -7,18 +7,34 @@ struct EditorRequest: Identifiable {
     var isNew: Bool
     /// Set when scheduling an idea, so the idea can be removed from the list on save.
     var ideaID: Idea.ID?
+    /// Set when adding a suggestion, so the choice is remembered once it's saved.
+    var suggestionKey: String?
 
     static func edit(_ event: PlanEvent) -> EditorRequest {
         EditorRequest(event: event, isNew: false)
     }
 
     static func new(day: Date, hour: Int, title: String = "", status: PlanStatus = .confirmed, ideaID: Idea.ID? = nil) -> EditorRequest {
-        let cal = Calendar.current
-        let start = cal.date(bySettingHour: hour, minute: 0, second: 0, of: day)!
-        let end = hour < 23
-            ? cal.date(byAdding: .hour, value: 1, to: start)!
-            : cal.date(bySettingHour: 23, minute: 59, second: 0, of: day)!
-        return EditorRequest(event: PlanEvent(title: title, start: start, end: end, status: status), isNew: true, ideaID: ideaID)
+        let start = Calendar.current.date(bySettingHour: hour, minute: 0, second: 0, of: day)!
+        return new(start: start, minutes: 60, title: title, status: status, ideaID: ideaID)
+    }
+
+    static func new(start: Date, minutes: Int, title: String = "", status: PlanStatus = .confirmed, ideaID: Idea.ID? = nil) -> EditorRequest {
+        // Keep the end on the same day, since the editor has a single date.
+        let lastMinute = Calendar.current.date(bySettingHour: 23, minute: 59, second: 0, of: start)!
+        let end = min(start.addingTimeInterval(TimeInterval(minutes * 60)), lastMinute)
+        var event = PlanEvent(title: title, start: start, end: end, status: status)
+        event.ideaID = ideaID
+        return EditorRequest(event: event, isNew: true, ideaID: ideaID)
+    }
+
+    /// Prefilled from a suggestion as a potential plan, which the user can still change.
+    static func suggested(_ suggestion: Suggestion) -> EditorRequest {
+        var request = new(start: suggestion.start, minutes: suggestion.minutes, title: suggestion.title,
+                          status: .potential, ideaID: suggestion.ideaID)
+        request.event.freeTime = true
+        request.suggestionKey = suggestion.key
+        return request
     }
 
     /// The next full hour if `day` is today, otherwise 9am.
@@ -61,8 +77,24 @@ struct EventEditorView: View {
     private var timesValid: Bool { end > start }
     private var canSave: Bool { !title.trimmingCharacters(in: .whitespaces).isEmpty && timesValid }
 
+    /// Other plans at the same time. Overlaps are allowed (to compare options), but worth a heads-up.
+    private var overlapping: [PlanEvent] {
+        store.events
+            .filter { $0.id != request.event.id && $0.start < end && $0.end > start }
+            .sorted { $0.start < $1.start }
+    }
+
+    private var overlapWarning: String? {
+        guard timesValid, let first = overlapping.first else { return nil }
+        let time = "\(first.start.formatted(date: .omitted, time: .shortened)) – \(first.end.formatted(date: .omitted, time: .shortened))"
+        return overlapping.count == 1
+            ? "Overlaps with \(first.title) (\(time))"
+            : "Overlaps with \(first.title) and \(overlapping.count - 1) more"
+    }
+
     private var navTitle: String {
         if !request.isNew { return "Edit Event" }
+        if request.suggestionKey != nil { return "Add Suggestion" }
         return request.ideaID != nil ? "Schedule Idea" : "New Event"
     }
 
@@ -83,6 +115,11 @@ struct EventEditorView: View {
                         Text("End time must be after start time.")
                             .font(.footnote)
                             .foregroundStyle(.red)
+                    }
+                    if let overlapWarning {
+                        Label(overlapWarning, systemImage: "exclamationmark.triangle.fill")
+                            .font(.footnote)
+                            .foregroundStyle(.orange)
                     }
                 }
 
@@ -126,6 +163,12 @@ struct EventEditorView: View {
                     Button("Save", action: save).disabled(!canSave)
                 }
             }
+            .onAppear {
+                // Ideas the user does regularly stay in the list by default.
+                if let ideaID = request.ideaID {
+                    keepIdea = store.ideas.first { $0.id == ideaID }?.repeats ?? false
+                }
+            }
             .task {
                 // Open the keyboard right away for a brand-new, untitled event.
                 guard request.isNew, title.isEmpty else { return }
@@ -149,8 +192,16 @@ struct EventEditorView: View {
         event.status = status
         event.notes = notes.trimmingCharacters(in: .whitespacesAndNewlines)
         store.upsert(event)
-        if let ideaID = request.ideaID, !keepIdea {
-            store.removeIdea(ideaID)
+        if let key = request.suggestionKey {
+            store.recordAccepted(key)
+        }
+        if let ideaID = request.ideaID, var idea = store.ideas.first(where: { $0.id == ideaID }) {
+            if keepIdea {
+                idea.repeats = true
+                store.updateIdea(idea)
+            } else {
+                store.removeIdea(ideaID)
+            }
         }
         onSaved(event.start)
         dismiss()
