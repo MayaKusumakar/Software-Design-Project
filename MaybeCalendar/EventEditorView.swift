@@ -15,14 +15,19 @@ struct EditorRequest: Identifiable {
     }
 
     static func new(day: Date, hour: Int, title: String = "", status: PlanStatus = .confirmed, ideaID: Idea.ID? = nil) -> EditorRequest {
-        let start = Calendar.current.date(bySettingHour: hour, minute: 0, second: 0, of: day)!
+        new(day: day, minute: hour * 60, title: title, status: status, ideaID: ideaID)
+    }
+
+    /// A new plan starting `minute` minutes after midnight on `day`.
+    static func new(day: Date, minute: Int, title: String = "", status: PlanStatus = .confirmed, ideaID: Idea.ID? = nil) -> EditorRequest {
+        let start = Calendar.current.date(bySettingHour: minute / 60, minute: minute % 60, second: 0, of: day)!
         return new(start: start, minutes: 60, title: title, status: status, ideaID: ideaID)
     }
 
     static func new(start: Date, minutes: Int, title: String = "", status: PlanStatus = .confirmed, ideaID: Idea.ID? = nil) -> EditorRequest {
-        // Keep the end on the same day, since the editor has a single date.
-        let lastMinute = Calendar.current.date(bySettingHour: 23, minute: 59, second: 0, of: start)!
-        let end = min(start.addingTimeInterval(TimeInterval(minutes * 60)), lastMinute)
+        // End by midnight at the latest, since the editor has a single date.
+        let midnight = Calendar.current.date(byAdding: .day, value: 1, to: Calendar.current.startOfDay(for: start))!
+        let end = min(start.addingTimeInterval(TimeInterval(minutes * 60)), midnight)
         var event = PlanEvent(title: title, start: start, end: end, status: status)
         event.ideaID = ideaID
         return EditorRequest(event: event, isNew: true, ideaID: ideaID)
@@ -41,6 +46,25 @@ struct EditorRequest: Identifiable {
     static func suggestedHour(for day: Date) -> Int {
         guard Calendar.current.isDateInToday(day) else { return 9 }
         return min(Calendar.current.component(.hour, from: .now) + 1, 23)
+    }
+}
+
+/// Turns the editor's separate date and time pickers into real start and end dates.
+enum PlanTime {
+    /// The calendar date of `day` with the hour and minute of `time`.
+    static func combine(_ day: Date, _ time: Date, calendar: Calendar = .current) -> Date {
+        let t = calendar.dateComponents([.hour, .minute], from: time)
+        return calendar.date(bySettingHour: t.hour ?? 0, minute: t.minute ?? 0, second: 0, of: day) ?? day
+    }
+
+    /// An end time of 12:00 AM after a later start means midnight at the end of that day.
+    static func end(day: Date, start: Date, endTime: Date, calendar: Calendar = .current) -> Date {
+        let end = combine(day, endTime, calendar: calendar)
+        let t = calendar.dateComponents([.hour, .minute], from: endTime)
+        if end <= start, t.hour == 0, t.minute == 0 {
+            return calendar.date(byAdding: .day, value: 1, to: end) ?? end
+        }
+        return end
     }
 }
 
@@ -72,10 +96,15 @@ struct EventEditorView: View {
         _notes = State(initialValue: request.event.notes)
     }
 
-    private var start: Date { combine(day, startTime) }
-    private var end: Date { combine(day, endTime) }
+    private var start: Date { PlanTime.combine(day, startTime) }
+    private var end: Date { PlanTime.end(day: day, start: start, endTime: endTime) }
     private var timesValid: Bool { end > start }
     private var canSave: Bool { !title.trimmingCharacters(in: .whitespaces).isEmpty && timesValid }
+
+    /// Plans that came from an idea or are only a maybe can go back to the Ideas list.
+    private var canMoveBackToIdeas: Bool {
+        !request.isNew && (request.event.ideaID != nil || request.event.status == .potential)
+    }
 
     /// Other plans at the same time. Overlaps are allowed (to compare options), but worth a heads-up.
     private var overlapping: [PlanEvent] {
@@ -88,8 +117,8 @@ struct EventEditorView: View {
         guard timesValid, let first = overlapping.first else { return nil }
         let time = "\(first.start.formatted(date: .omitted, time: .shortened)) – \(first.end.formatted(date: .omitted, time: .shortened))"
         return overlapping.count == 1
-            ? "Overlaps with \(first.title) (\(time))"
-            : "Overlaps with \(first.title) and \(overlapping.count - 1) more"
+            ? "Overlaps with \(first.title) (\(time)). That's okay; both will show side by side."
+            : "Overlaps with \(first.title) and \(overlapping.count - 1) more. That's okay; they'll show side by side."
     }
 
     private var navTitle: String {
@@ -108,6 +137,19 @@ struct EventEditorView: View {
                 }
 
                 Section {
+                    Picker("Status", selection: $status) {
+                        ForEach(PlanStatus.allCases) { Text($0.label).tag($0) }
+                    }
+                    .pickerStyle(.segmented)
+                } header: {
+                    Text("Is this happening for sure?")
+                } footer: {
+                    Text(status == .potential
+                         ? "A maybe: shows as a dashed block you can hide. Tap + on it once it's happening."
+                         : "Happening for sure: shows as a solid block.")
+                }
+
+                Section {
                     DatePicker("Date", selection: $day, displayedComponents: .date)
                     DatePicker("Starts", selection: $startTime, displayedComponents: .hourAndMinute)
                     DatePicker("Ends", selection: $endTime, displayedComponents: .hourAndMinute)
@@ -123,19 +165,6 @@ struct EventEditorView: View {
                     }
                 }
 
-                Section {
-                    Picker("Status", selection: $status) {
-                        ForEach(PlanStatus.allCases) { Text($0.label).tag($0) }
-                    }
-                    .pickerStyle(.segmented)
-                } header: {
-                    Text("Status")
-                } footer: {
-                    Text(status == .potential
-                         ? "Potential plans appear as dashed blocks you can hide. Tap + on the block to commit."
-                         : "Confirmed plans always show on your calendar.")
-                }
-
                 Section("Notes") {
                     TextField("Notes", text: $notes, axis: .vertical)
                         .lineLimit(3...8)
@@ -147,12 +176,24 @@ struct EventEditorView: View {
                     }
                 }
 
+                if canMoveBackToIdeas {
+                    Section {
+                        Button("Move Back to Ideas") {
+                            store.moveBackToIdeas(request.event.id)
+                            dismiss()
+                        }
+                    } footer: {
+                        Text("Takes it off the calendar and keeps it in your Ideas for another time.")
+                    }
+                }
+
                 if !request.isNew {
                     Section {
                         Button("Delete Event", role: .destructive) { confirmingDelete = true }
                     }
                 }
             }
+            .scrollDismissesKeyboard(.interactively)
             .navigationTitle(navTitle)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -205,12 +246,5 @@ struct EventEditorView: View {
         }
         onSaved(event.start)
         dismiss()
-    }
-
-    /// The calendar date of `day` with the hour and minute of `time`.
-    private func combine(_ day: Date, _ time: Date) -> Date {
-        let cal = Calendar.current
-        let t = cal.dateComponents([.hour, .minute], from: time)
-        return cal.date(bySettingHour: t.hour ?? 0, minute: t.minute ?? 0, second: 0, of: day) ?? day
     }
 }

@@ -5,17 +5,14 @@ struct CalendarView: View {
     @Binding var selectedDay: Date
     /// When set, the timeline scrolls to this time (e.g. right after saving an event).
     @Binding var focusDate: Date?
-    /// Opens the Ideas tab, ready to type a new idea.
-    var onAddIdea: () -> Void = {}
     @State private var editor: EditorRequest?
-    @State private var ideaToEdit: Idea?
+    @State private var ideaEditor: IdeaEditorRequest?
+    @State private var openGap: SlotSuggestions?
+    @State private var showingMonth = false
+    @State private var undo: PlanUndo?
     @State private var confirmCount = 0
-    /// The free gap whose suggestion the card shows, identified by the gap's end time.
-    @State private var pickedGap: Date?
-    /// "Another idea" taps per gap.
-    @State private var alternateOffsets: [Date: Int] = [:]
-    @AppStorage("suggestionsCollapsed") private var suggestionsCollapsed = false
-    @AppStorage("ideasInviteDismissed") private var inviteDismissed = false
+    @State private var addCount = 0
+    @AppStorage("ideasTrayExpanded") private var trayExpanded = false
 
     var body: some View {
         NavigationStack {
@@ -28,33 +25,58 @@ struct CalendarView: View {
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     Button("Today") {
-                        selectedDay = .now
+                        goTo(.now)
                         focusDate = .now
                     }
                 }
+                ToolbarItem(placement: .principal) {
+                    Button { showingMonth = true } label: {
+                        HStack(spacing: 4) {
+                            Text(selectedDay.formatted(.dateTime.month(.wide).year()))
+                                .font(.headline)
+                            Image(systemName: "chevron.down")
+                                .font(.caption.weight(.bold))
+                        }
+                        .foregroundStyle(.primary)
+                    }
+                    .accessibilityLabel(selectedDay.formatted(.dateTime.month(.wide).year()))
+                    .accessibilityHint("Shows the month and year")
+                }
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button {
-                        editor = .new(day: selectedDay, hour: EditorRequest.suggestedHour(for: selectedDay))
+                    Menu {
+                        Button {
+                            editor = .new(day: selectedDay, hour: EditorRequest.suggestedHour(for: selectedDay))
+                        } label: {
+                            Label("New Event", systemImage: "calendar.badge.plus")
+                        }
+                        Button { ideaEditor = .new } label: {
+                            Label("New Idea", systemImage: "lightbulb")
+                        }
                     } label: {
                         Image(systemName: "plus")
                     }
-                    .accessibilityLabel("New event")
+                    .accessibilityLabel("Add")
                 }
             }
             .sheet(item: $editor) { request in
                 EventEditorView(request: request) { savedDate in
-                    selectedDay = savedDate
+                    goTo(savedDate)
                     focusDate = savedDate
                 }
             }
-            .sheet(item: $ideaToEdit) { idea in
-                IdeaEditorView(idea: idea)
+            .sheet(item: $ideaEditor) { request in
+                IdeaEditorView(request: request)
+            }
+            .sheet(item: $openGap) { plan in
+                FreeTimeSheet(plan: plan, onAdd: add) { savedDate in
+                    focusDate = savedDate
+                }
+            }
+            .sheet(isPresented: $showingMonth) {
+                MonthYearView(selectedDay: $selectedDay)
             }
             .sensoryFeedback(.success, trigger: confirmCount)
-            .onChange(of: Calendar.current.startOfDay(for: selectedDay)) {
-                pickedGap = nil
-                alternateOffsets = [:]
-            }
+            .sensoryFeedback(.success, trigger: addCount)
         }
     }
 
@@ -63,24 +85,26 @@ struct CalendarView: View {
         let dayEvents = store.events(on: selectedDay, includePotential: true)
         let visibleEvents = dayEvents.filter { store.showPotential || $0.status == .confirmed }
         let hiddenCount = dayEvents.count - visibleEvents.count
-        let shown = SuggestionEngine.shown(store.suggestions(for: selectedDay, now: now), offsets: alternateOffsets)
-        // The card starts on the day's strongest suggestion; tapping another outline switches to it.
-        let current = shown.first { $0.id == pickedGap } ?? shown.max { $0.suggestion.score < $1.suggestion.score }
+        let plans = store.suggestions(for: selectedDay, now: now)
+        let shown = SuggestionEngine.shown(plans)
 
         VStack(spacing: 0) {
-            WeekStrip(selectedDay: $selectedDay)
+            WeekStrip(selectedDay: $selectedDay, now: now)
 
-            HStack {
+            HStack(spacing: 6) {
+                DayStepButton(systemImage: "chevron.left", label: "Previous day") { step(-1) }
                 Text(selectedDay.formatted(.dateTime.weekday(.abbreviated).month(.abbreviated).day()))
                     .font(.subheadline.bold())
                     .lineLimit(1)
-                Spacer()
+                    .frame(minWidth: 92)
+                DayStepButton(systemImage: "chevron.right", label: "Next day") { step(1) }
+                Spacer(minLength: 4)
                 PotentialLayerButton(isShowing: store.showPotential, hiddenCount: hiddenCount) {
                     withAnimation { store.showPotential.toggle() }
                 }
             }
             .padding(.horizontal)
-            .padding(.vertical, 8)
+            .padding(.vertical, 6)
 
             Divider()
 
@@ -88,23 +112,29 @@ struct CalendarView: View {
                 day: selectedDay,
                 events: visibleEvents,
                 focusDate: $focusDate,
-                onTapHour: { hour in editor = .new(day: selectedDay, hour: hour) },
+                onTapTime: { minute in editor = .new(day: selectedDay, minute: minute) },
                 onTapEvent: { editor = .edit($0) },
                 onConfirm: { event in
                     withAnimation { store.confirm(event.id) }
                     confirmCount += 1
                 },
-                suggestions: suggestionsCollapsed ? [] : shown,
-                selectedSuggestion: current?.id,
-                onTapSuggestion: { tapped in
-                    withAnimation(.snappy) { pickedGap = tapped.id }
-                }
+                onMove: { event, start in
+                    withAnimation(.snappy) { store.moveEvent(event.id, to: start) }
+                },
+                onResize: { event, end in
+                    withAnimation(.snappy) { store.resizeEvent(event.id, end: end) }
+                },
+                suggestions: shown,
+                onOpenSuggestion: { tapped in openGap = plans.first { $0.id == tapped.id } },
+                onAddSuggestion: { tapped in add(tapped.suggestion) },
+                onDropIdea: drop,
+                onSwipeDay: step
             )
             .overlay(alignment: .top) {
-                if visibleEvents.isEmpty {
+                if visibleEvents.isEmpty, hiddenCount > 0 || shown.isEmpty {
                     Text(hiddenCount > 0
                          ? "Potential plans are hidden. Tap the eye button to show them."
-                         : "No plans yet. Tap an hour or + to add one.")
+                         : "No plans yet. Tap or hold an hour to add one.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
@@ -116,55 +146,82 @@ struct CalendarView: View {
                         .allowsHitTesting(false)
                 }
             }
-            .safeAreaInset(edge: .bottom) {
-                suggestionArea(shown: shown, current: current, now: now)
-                    .padding(.horizontal)
-                    .padding(.bottom, 8)
-                    .animation(.snappy, value: current?.suggestion.id)
-                    .animation(.snappy, value: suggestionsCollapsed)
+            // Below the timeline rather than floating over it, so taps always reach these.
+            VStack(spacing: 8) {
+                if let undo {
+                    UndoBar(undo: undo) {
+                        withAnimation(.snappy) {
+                            store.undo(undo)
+                            self.undo = nil
+                        }
+                    }
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                }
+                IdeasTray(day: selectedDay, now: now, expanded: $trayExpanded,
+                          onSchedule: schedule, onNewIdea: { ideaEditor = .new })
             }
+            .padding(.horizontal)
+            .padding(.top, 6)
+            .padding(.bottom, 8)
+            .animation(.snappy, value: undo?.id)
+            .animation(.snappy, value: trayExpanded)
         }
     }
 
-    @ViewBuilder
-    private func suggestionArea(shown: [SuggestionEngine.Shown], current: SuggestionEngine.Shown?, now: Date) -> some View {
-        if let current {
-            if suggestionsCollapsed {
-                SuggestionPill(count: shown.count) { suggestionsCollapsed = false }
-                    .transition(.opacity)
-            } else {
-                SuggestionCard(
-                    shown: current,
-                    onAdd: { editor = .suggested(current.suggestion) },
-                    onAnother: {
-                        withAnimation(.snappy) { alternateOffsets[current.id, default: 0] += 1 }
-                    },
-                    onNotNow: {
-                        withAnimation(.snappy) { store.recordDismissed(current.suggestion.key) }
-                    },
-                    onOpen: current.suggestion.ideaID
-                        .flatMap { id in store.ideas.first { $0.id == id } }
-                        .map { idea in { ideaToEdit = idea } },
-                    onCollapse: { suggestionsCollapsed = true }
-                )
-                .id(current.suggestion.id)
-                .transition(.opacity.combined(with: .move(edge: .bottom)))
-            }
-        } else if showsIdeasInvite(now: now) {
-            IdeasInviteCard(onAddIdea: onAddIdea) {
-                withAnimation { inviteDismissed = true }
-            }
-            .transition(.opacity.combined(with: .move(edge: .bottom)))
-        }
+    private func goTo(_ day: Date) {
+        withAnimation(.snappy) { selectedDay = day }
     }
 
-    /// Nothing to suggest from yet, but there is free time to fill. Never shown for a day
-    /// that's already full or over.
-    private func showsIdeasInvite(now: Date) -> Bool {
-        !inviteDismissed
-            && store.ideas.isEmpty
-            && SuggestionEngine.habits(from: store.events, now: now).isEmpty
-            && !SuggestionEngine.freeSlots(on: selectedDay, events: store.events, now: now).isEmpty
+    private func step(_ days: Int) {
+        goTo(Calendar.current.date(byAdding: .day, value: days, to: selectedDay)!)
+    }
+
+    /// One tap on a suggestion's + adds it as a potential plan, with a moment to undo.
+    private func add(_ suggestion: Suggestion) {
+        showUndo(withAnimation(.snappy) { store.add(suggestion) })
+    }
+
+    /// An idea dragged from the tray onto the timeline becomes a potential plan at that time.
+    private func drop(_ id: Idea.ID, at start: Date) {
+        guard let idea = store.ideas.first(where: { $0.id == id }) else { return }
+        showUndo(withAnimation(.snappy) {
+            store.addPlan(title: idea.title, start: start, minutes: idea.effectiveMinutes,
+                          ideaID: idea.id, feedbackKey: SuggestionEngine.ideaKey(idea.id))
+        })
+    }
+
+    /// Tapping an idea in the tray opens the editor at the first time it fits.
+    private func schedule(_ idea: Idea, at fit: Date?) {
+        let start = fit ?? Calendar.current.date(
+            bySettingHour: EditorRequest.suggestedHour(for: selectedDay), minute: 0, second: 0, of: selectedDay)!
+        editor = .new(start: start, minutes: idea.effectiveMinutes, title: idea.title, status: .potential, ideaID: idea.id)
+    }
+
+    private func showUndo(_ result: PlanUndo) {
+        addCount += 1
+        undo = result
+        Task {
+            try? await Task.sleep(for: .seconds(8))
+            if undo?.id == result.id { withAnimation(.snappy) { undo = nil } }
+        }
+    }
+}
+
+private struct DayStepButton: View {
+    let systemImage: String
+    let label: String
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: systemImage)
+                .font(.subheadline.weight(.bold))
+                .frame(width: 22, height: 22)
+        }
+        .buttonStyle(.bordered)
+        .buttonBorderShape(.circle)
+        .controlSize(.small)
+        .accessibilityLabel(label)
     }
 }
 
@@ -174,13 +231,16 @@ struct PotentialLayerButton: View {
     let hiddenCount: Int
     let action: () -> Void
 
+    private var icon: String { isShowing ? "eye" : "eye.slash" }
+
     var body: some View {
         Button(action: action) {
-            Label {
-                Text(isShowing ? "Potential shown"
-                     : hiddenCount > 0 ? "\(hiddenCount) potential hidden" : "Potential hidden")
-            } icon: {
-                Image(systemName: isShowing ? "eye" : "eye.slash")
+            ViewThatFits(in: .horizontal) {
+                Label(isShowing ? "Potential shown"
+                      : hiddenCount > 0 ? "\(hiddenCount) potential hidden" : "Potential hidden",
+                      systemImage: icon)
+                Label(isShowing ? "Shown" : hiddenCount > 0 ? "\(hiddenCount) hidden" : "Hidden", systemImage: icon)
+                Image(systemName: icon)
             }
             .font(.subheadline)
             .lineLimit(1)
@@ -199,6 +259,7 @@ struct PotentialLayerButton: View {
 struct WeekStrip: View {
     @Environment(Store.self) private var store
     @Binding var selectedDay: Date
+    let now: Date
 
     private var days: [Date] {
         let cal = Calendar.current
@@ -208,26 +269,20 @@ struct WeekStrip: View {
 
     var body: some View {
         HStack(spacing: 0) {
-            Button { shiftWeek(-1) } label: {
-                Image(systemName: "chevron.left").frame(width: 32, height: 44)
-            }
-            .accessibilityLabel("Previous week")
+            weekButton(-1)
 
             ForEach(days, id: \.self) { day in
                 dayCell(day)
                     .frame(maxWidth: .infinity)
                     .contentShape(Rectangle())
-                    .onTapGesture { selectedDay = day }
+                    .onTapGesture { withAnimation(.snappy) { selectedDay = day } }
                     .accessibilityElement(children: .combine)
                     .accessibilityAddTraits(.isButton)
             }
 
-            Button { shiftWeek(1) } label: {
-                Image(systemName: "chevron.right").frame(width: 32, height: 44)
-            }
-            .accessibilityLabel("Next week")
+            weekButton(1)
         }
-        .padding(.horizontal, 4)
+        .padding(.horizontal, 2)
         .padding(.vertical, 8)
         .gesture(
             DragGesture(minimumDistance: 30).onEnded { value in
@@ -237,6 +292,17 @@ struct WeekStrip: View {
         )
     }
 
+    /// Big double arrows for weeks, so they're not confused with the single day arrows below.
+    private func weekButton(_ weeks: Int) -> some View {
+        Button { shiftWeek(weeks) } label: {
+            Image(systemName: weeks < 0 ? "chevron.left.2" : "chevron.right.2")
+                .font(.title3.weight(.semibold))
+                .frame(width: 38, height: 48)
+                .contentShape(Rectangle())
+        }
+        .accessibilityLabel(weeks < 0 ? "Previous week" : "Next week")
+    }
+
     private func dayCell(_ day: Date) -> some View {
         let cal = Calendar.current
         let isSelected = cal.isDate(day, inSameDayAs: selectedDay)
@@ -244,6 +310,7 @@ struct WeekStrip: View {
         let dayEvents = store.events(on: day, includePotential: store.showPotential)
         let hasConfirmed = dayEvents.contains { $0.status == .confirmed }
         let hasPotential = dayEvents.contains { $0.status == .potential }
+        let hasIdea = day >= cal.startOfDay(for: now) && !store.suggestions(for: day, now: now).isEmpty
 
         return VStack(spacing: 4) {
             Text(day.formatted(.dateTime.weekday(.narrow)))
@@ -261,13 +328,17 @@ struct WeekStrip: View {
                 if hasPotential {
                     Circle().strokeBorder(Color.accentColor, lineWidth: 1).frame(width: 6, height: 6)
                 }
+                if hasIdea {
+                    Circle().fill(Color.yellow).frame(width: 6, height: 6)
+                }
             }
             .frame(height: 6)
         }
+        .accessibilityValue(hasIdea ? "Has free time ideas" : "")
     }
 
     private func shiftWeek(_ weeks: Int) {
-        withAnimation { selectedDay = Calendar.current.date(byAdding: .weekOfYear, value: weeks, to: selectedDay)! }
+        withAnimation(.snappy) { selectedDay = Calendar.current.date(byAdding: .weekOfYear, value: weeks, to: selectedDay)! }
     }
 }
 
@@ -277,17 +348,34 @@ struct DayTimeline: View {
     let day: Date
     let events: [PlanEvent]
     @Binding var focusDate: Date?
-    let onTapHour: (Int) -> Void
+    /// Tapped or held an empty time, in minutes after midnight.
+    let onTapTime: (Int) -> Void
     let onTapEvent: (PlanEvent) -> Void
     let onConfirm: (PlanEvent) -> Void
+    var onMove: (PlanEvent, Date) -> Void = { _, _ in }
+    var onResize: (PlanEvent, Date) -> Void = { _, _ in }
     var suggestions: [SuggestionEngine.Shown] = []
-    var selectedSuggestion: Date?
-    var onTapSuggestion: (SuggestionEngine.Shown) -> Void = { _ in }
+    var onOpenSuggestion: (SuggestionEngine.Shown) -> Void = { _ in }
+    var onAddSuggestion: (SuggestionEngine.Shown) -> Void = { _ in }
+    var onDropIdea: (Idea.ID, Date) -> Void = { _, _ in }
+    /// +1 for the next day, -1 for the previous one.
+    var onSwipeDay: (Int) -> Void = { _ in }
 
     @State private var didInitialScroll = false
+    @State private var active: ActiveDrag?
+    /// Set while a plan is being dragged, so letting go doesn't also count as a swipe to another day.
+    @State private var suppressSwipe = false
+    @State private var liftCount = 0
+
+    private struct ActiveDrag: Equatable {
+        var id: PlanEvent.ID
+        var offset: CGFloat
+        var resizing: Bool
+    }
 
     private let hourHeight: CGFloat = 60
     private let labelWidth: CGFloat = 52
+    private let snapMinutes = 15
 
     var body: some View {
         ScrollViewReader { proxy in
@@ -299,8 +387,17 @@ struct DayTimeline: View {
                     if Calendar.current.isDateInToday(day) { nowLine }
                 }
                 .frame(height: hourHeight * 24)
+                .dropDestination(for: String.self) { items, location in
+                    guard let id = items.first.flatMap(UUID.init(uuidString:)) else { return false }
+                    onDropIdea(id, time(atY: location.y))
+                    return true
+                }
+                // On the content, so the scroll view doesn't swallow sideways swipes.
+                .simultaneousGesture(swipeGesture)
                 .padding(.vertical, 8)
             }
+            .scrollDisabled(active != nil)
+            .sensoryFeedback(.impact(weight: .medium), trigger: liftCount)
             .onAppear {
                 if let focusDate {
                     scroll(proxy, toHour: hour(of: focusDate))
@@ -345,6 +442,71 @@ struct DayTimeline: View {
         }
     }
 
+    // MARK: Gestures
+
+    private var swipeGesture: some Gesture {
+        DragGesture(minimumDistance: 30)
+            .onEnded { value in
+                if suppressSwipe {
+                    suppressSwipe = false
+                    return
+                }
+                let dx = value.translation.width, dy = value.translation.height
+                if abs(dx) > 80, abs(dx) > abs(dy) * 2 { onSwipeDay(dx < 0 ? 1 : -1) }
+            }
+    }
+
+    /// Press and hold a plan, then drag it up or down to move it.
+    private func moveGesture(for event: PlanEvent) -> some Gesture {
+        LongPressGesture(minimumDuration: 0.3)
+            .sequenced(before: DragGesture(minimumDistance: 0))
+            .onChanged { value in
+                guard case .second(true, let drag) = value else { return }
+                if active?.id != event.id { liftCount += 1 }
+                suppressSwipe = true
+                active = ActiveDrag(id: event.id, offset: drag?.translation.height ?? 0, resizing: false)
+            }
+            .onEnded { value in
+                defer { active = nil }
+                guard case .second(true, let drag?) = value else { return }
+                let start = movedStart(event, by: drag.translation.height)
+                if start != event.start { onMove(event, start) }
+            }
+    }
+
+    private func finishResize(_ event: PlanEvent, by offset: CGFloat) {
+        defer { active = nil }
+        let end = resizedEnd(event, by: offset)
+        if end != event.end { onResize(event, end) }
+    }
+
+    private func snapped(_ offset: CGFloat) -> Int {
+        Int((offset / hourHeight * 60 / CGFloat(snapMinutes)).rounded()) * snapMinutes
+    }
+
+    private var dayStart: Date { Calendar.current.startOfDay(for: day) }
+    private var nextMidnight: Date { Calendar.current.date(byAdding: .day, value: 1, to: dayStart)! }
+
+    private func movedStart(_ event: PlanEvent, by offset: CGFloat) -> Date {
+        let length = event.end.timeIntervalSince(event.start)
+        let start = event.start + TimeInterval(snapped(offset) * 60)
+        return min(max(start, dayStart), nextMidnight - length)
+    }
+
+    private func resizedEnd(_ event: PlanEvent, by offset: CGFloat) -> Date {
+        let end = event.end + TimeInterval(snapped(offset) * 60)
+        return min(max(end, event.start + TimeInterval(snapMinutes * 60)), nextMidnight)
+    }
+
+    /// The time at a point on the timeline, snapped to 15 minutes.
+    private func time(atY y: CGFloat) -> Date {
+        let minute = Int((y / hourHeight * 60).rounded(.down))
+        let snappedMinute = max(0, min(minute / snapMinutes * snapMinutes, 24 * 60 - snapMinutes))
+        return Calendar.current.date(bySettingHour: snappedMinute / 60, minute: snappedMinute % 60, second: 0, of: day)!
+    }
+
+    // MARK: Layers
+
     private var hourGrid: some View {
         VStack(spacing: 0) {
             ForEach(0..<24, id: \.self) { hour in
@@ -358,27 +520,17 @@ struct DayTimeline: View {
                 }
                 .frame(height: hourHeight)
                 .contentShape(Rectangle())
-                .onTapGesture { onTapHour(hour) }
+                // Tap the top or bottom half of an hour to start on the hour or half past;
+                // pressing and holding works too.
+                .onTapGesture { location in
+                    onTapTime(hour * 60 + (location.y >= hourHeight / 2 ? 30 : 0))
+                }
+                .onLongPressGesture(minimumDuration: 0.35) { onTapTime(hour * 60) }
                 .accessibilityElement(children: .ignore)
                 .accessibilityLabel("Add event at \(hourLabel(hour).isEmpty ? "midnight" : hourLabel(hour))")
                 .accessibilityAddTraits(.isButton)
+                .accessibilityAction { onTapTime(hour * 60) }
                 .id(hour)
-            }
-        }
-    }
-
-    private var eventsLayer: some View {
-        GeometryReader { geo in
-            let columnWidth = geo.size.width - labelWidth - 8
-            ForEach(layoutEvents(events)) { placed in
-                let top = minutesIntoDay(placed.event.start) / 60 * hourHeight
-                let bottom = min(minutesIntoDay(placed.event.end), 24 * 60) / 60 * hourHeight
-                let laneWidth = columnWidth / CGFloat(placed.lanes)
-                EventBlock(event: placed.event, onConfirm: { onConfirm(placed.event) })
-                    .frame(width: laneWidth - 3, height: max(bottom - top - 2, 26))
-                    .offset(x: labelWidth + laneWidth * CGFloat(placed.lane), y: top)
-                    .onTapGesture { onTapEvent(placed.event) }
-                    .accessibilityAction(named: "Edit") { onTapEvent(placed.event) }
             }
         }
     }
@@ -387,16 +539,55 @@ struct DayTimeline: View {
         GeometryReader { geo in
             let columnWidth = geo.size.width - labelWidth - 8
             ForEach(suggestions) { shown in
-                let top = minutesIntoDay(shown.suggestion.start) / 60 * hourHeight
-                let bottom = minutesIntoDay(shown.suggestion.end) / 60 * hourHeight
-                SuggestionGhost(suggestion: shown.suggestion, isSelected: shown.id == selectedSuggestion)
-                    .frame(width: columnWidth - 3, height: max(bottom - top - 2, 22))
+                let suggestion = shown.suggestion
+                let top = minutesIntoDay(suggestion.start) / 60 * hourHeight
+                let bottom = minutesIntoDay(suggestion.end) / 60 * hourHeight
+                let height = max(bottom - top - 2, 26)
+                SuggestionGhost(suggestion: suggestion, height: height,
+                                onOpen: { onOpenSuggestion(shown) },
+                                onAdd: { onAddSuggestion(shown) })
+                    .frame(width: columnWidth - 3, height: height)
                     .offset(x: labelWidth, y: top)
-                    .onTapGesture { onTapSuggestion(shown) }
-                    // The card already shows the selected one, so taps on it reach the hour
-                    // underneath (to add a plan there) instead.
-                    .allowsHitTesting(shown.id != selectedSuggestion)
                     .transition(.opacity)
+            }
+        }
+    }
+
+    private var eventsLayer: some View {
+        GeometryReader { geo in
+            let columnWidth = geo.size.width - labelWidth - 8
+            ForEach(layoutEvents(events)) { placed in
+                let event = placed.event
+                let drag = active?.id == event.id ? active : nil
+                let start = drag.map { $0.resizing ? event.start : movedStart(event, by: $0.offset) } ?? event.start
+                let end = drag.map { $0.resizing ? resizedEnd(event, by: $0.offset) : start + event.end.timeIntervalSince(event.start) } ?? event.end
+                let top = minutesIntoDay(start) / 60 * hourHeight
+                let bottom = min(minutesIntoDay(end), 24 * 60) / 60 * hourHeight
+                let laneWidth = columnWidth / CGFloat(placed.lanes)
+                EventBlock(
+                    event: event,
+                    shownStart: start,
+                    shownEnd: end,
+                    isLifted: drag != nil,
+                    onConfirm: { onConfirm(event) },
+                    onResizeChanged: { offset in
+                        suppressSwipe = true
+                        active = ActiveDrag(id: event.id, offset: offset, resizing: true)
+                    },
+                    onResizeEnded: { offset in finishResize(event, by: offset) }
+                )
+                .frame(width: laneWidth - 3, height: max(bottom - top - 2, 26))
+                .offset(x: labelWidth + laneWidth * CGFloat(placed.lane), y: top)
+                .zIndex(drag != nil ? 1 : 0)
+                .onTapGesture { onTapEvent(event) }
+                .gesture(moveGesture(for: event))
+                .accessibilityAction(named: "Edit") { onTapEvent(event) }
+                .accessibilityAction(named: "Move 30 minutes later") {
+                    onMove(event, movedStart(event, by: hourHeight / 2))
+                }
+                .accessibilityAction(named: "Move 30 minutes earlier") {
+                    onMove(event, movedStart(event, by: -hourHeight / 2))
+                }
             }
         }
     }
@@ -420,13 +611,19 @@ struct DayTimeline: View {
     }
 
     private func minutesIntoDay(_ date: Date) -> CGFloat {
-        CGFloat(date.timeIntervalSince(Calendar.current.startOfDay(for: day)) / 60)
+        CGFloat(date.timeIntervalSince(dayStart) / 60)
     }
 }
 
 struct EventBlock: View {
     let event: PlanEvent
+    /// The times to show, which differ from the saved ones while it's being dragged.
+    var shownStart: Date?
+    var shownEnd: Date?
+    var isLifted = false
     let onConfirm: () -> Void
+    var onResizeChanged: (CGFloat) -> Void = { _ in }
+    var onResizeEnded: (CGFloat) -> Void = { _ in }
 
     private var isPotential: Bool { event.status == .potential }
 
@@ -436,7 +633,7 @@ struct EventBlock: View {
                 Text(event.title)
                     .font(.caption.bold())
                     .lineLimit(2)
-                Text("\(event.start.formatted(date: .omitted, time: .shortened)) – \(event.end.formatted(date: .omitted, time: .shortened))")
+                Text("\((shownStart ?? event.start).formatted(date: .omitted, time: .shortened)) – \((shownEnd ?? event.end).formatted(date: .omitted, time: .shortened))")
                     .font(.caption2)
                     .lineLimit(1)
             }
@@ -461,17 +658,36 @@ struct EventBlock: View {
         }
         .background(
             RoundedRectangle(cornerRadius: 6)
-                .fill(isPotential ? Color.accentColor.opacity(0.12) : Color.accentColor)
+                .fill(isPotential ? Color.accentColor.opacity(isLifted ? 0.2 : 0.12) : Color.accentColor)
         )
         .overlay(
             RoundedRectangle(cornerRadius: 6)
                 .strokeBorder(Color.accentColor, style: StrokeStyle(lineWidth: isPotential ? 1.5 : 0, dash: [5, 3]))
         )
+        .overlay(alignment: .bottom) { resizeHandle }
         .clipShape(RoundedRectangle(cornerRadius: 6))
         .contentShape(RoundedRectangle(cornerRadius: 6))
+        .shadow(color: .black.opacity(isLifted ? 0.25 : 0), radius: 8, y: 4)
+        .scaleEffect(isLifted ? 1.02 : 1)
+        .animation(.snappy(duration: 0.2), value: isLifted)
         .accessibilityElement(children: .contain)
         .accessibilityLabel("\(event.title), \(event.status.label)")
         .accessibilityAddTraits(.isButton)
+    }
+
+    /// Drag the bottom edge to change when it ends.
+    private var resizeHandle: some View {
+        Capsule()
+            .fill(isPotential ? Color.accentColor.opacity(0.5) : Color.white.opacity(0.7))
+            .frame(width: 24, height: 4)
+            .frame(maxWidth: .infinity, minHeight: 14)
+            .contentShape(Rectangle())
+            .gesture(
+                DragGesture(minimumDistance: 2)
+                    .onChanged { onResizeChanged($0.translation.height) }
+                    .onEnded { onResizeEnded($0.translation.height) }
+            )
+            .accessibilityHidden(true)
     }
 }
 

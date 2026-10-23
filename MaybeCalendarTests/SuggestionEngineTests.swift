@@ -27,9 +27,14 @@ func idea(_ title: String, minutes: Int? = nil, bestTime: BestTime? = nil) -> Id
 let monday = at(19, 0)
 let earlyMonday = at(19, 6)
 
+/// Suggestions from the user's own ideas and habits; new ideas have their own tests.
 func suggest(_ day: Date = monday, events: [PlanEvent] = [], ideas: [Idea] = [],
-             feedback: [String: SuggestionFeedback] = [:], now: Date = earlyMonday) -> [SlotSuggestions] {
-    SuggestionEngine.suggestions(for: day, events: events, ideas: ideas, feedback: feedback, now: now, calendar: pacific)
+             feedback: [String: SuggestionFeedback] = [:], now: Date = earlyMonday,
+             newIdeas: Bool = false) -> [SlotSuggestions] {
+    var settings = SuggestionSettings()
+    settings.includeNewIdeas = newIdeas
+    return SuggestionEngine.suggestions(for: day, events: events, ideas: ideas, feedback: feedback, now: now,
+                                        calendar: pacific, settings: settings)
 }
 
 /// Every plan except a free window from `start` to `end` on Monday, within the suggestion hours.
@@ -52,9 +57,9 @@ struct FreeTimeTests {
         let found = slots(events)
         #expect(found.map(\.start) == [at(19, 8), at(19, 10), at(19, 12), at(19, 15)])
         #expect(found.map(\.end) == [at(19, 9), at(19, 11), at(19, 13), at(19, 22)])
-        // The two one-hour breaks keep a small buffer from the plans on either side.
-        #expect(found[1].usableStart == at(19, 10, 5))
-        #expect(found[1].usableEnd == at(19, 10, 55))
+        // Suggestions can use the whole hour, starting right on the hour.
+        #expect(found[1].usableStart == at(19, 10))
+        #expect(found[1].usableEnd == at(19, 11))
         #expect(found[2].minutes == 60)
     }
 
@@ -79,14 +84,19 @@ struct FreeTimeTests {
 
     @Test func timeThatHasPassedIsSkipped() {
         let found = slots([], now: at(19, 12, 2))
-        #expect(found.first?.start == at(19, 12, 5))
+        #expect(found.first?.start == at(19, 12, 15))
         #expect(slots([], day: at(18, 0), now: at(19, 12)).isEmpty)
     }
 
     @Test func planFromTheNightBeforeCountsAsBusy() {
         let events = [plan("Overnight", at(18, 20), at(19, 9))]
         #expect(slots(events).first?.start == at(19, 9))
-        #expect(slots(events).first?.usableStart == at(19, 9, 5))
+        #expect(slots(events).first?.usableStart == at(19, 9))
+    }
+
+    @Test func freeTimeAfterAnOddEndStartsOnTheQuarterHour() {
+        let events = [plan("Errand", at(19, 8), at(19, 8, 10))]
+        #expect(slots(events).first?.usableStart == at(19, 8, 15))
     }
 
     @Test func planRunningPastMidnightStopsAtTheEndOfTheDay() {
@@ -143,14 +153,14 @@ struct SuggestionTests {
     @Test func anIdeaWithoutALengthUsesTheDefault() {
         let fits = suggest(events: onlyFree(at(19, 10), at(19, 12)), ideas: [idea("Paint")])
         #expect(fits.first?.options.first?.minutes == Idea.defaultMinutes)
-        // A one-hour break leaves 50 usable minutes, not enough for the default hour.
-        #expect(suggest(events: onlyFree(at(19, 10), at(19, 11)), ideas: [idea("Paint")]).isEmpty)
+        // A 50-minute break isn't enough for the default hour.
+        #expect(suggest(events: onlyFree(at(19, 10), at(19, 10, 50)), ideas: [idea("Paint")]).isEmpty)
     }
 
     @Test func aNewPlanRemovesSuggestionsItConflictsWith() {
         let ideas = [idea("Read", minutes: 45)]
         let before = suggest(events: onlyFree(at(19, 10), at(19, 12)), ideas: ideas)
-        #expect(before.first?.options.first?.start == at(19, 10, 5))
+        #expect(before.first?.options.first?.start == at(19, 10))
 
         let after = suggest(events: onlyFree(at(19, 10), at(19, 12)) + [plan("Meeting", at(19, 10), at(19, 12))], ideas: ideas)
         #expect(after.isEmpty)
@@ -174,8 +184,8 @@ struct SuggestionTests {
     @Test func changingTheDayChangesTheSuggestions() {
         let events = [plan("Class", at(19, 8), at(19, 21)), plan("Class", at(20, 8), at(20, 9))]
         let ideas = [idea("Read", minutes: 45)]
-        #expect(suggest(monday, events: events, ideas: ideas).first?.options.first?.start == at(19, 21, 5))
-        #expect(suggest(at(20, 0), events: events, ideas: ideas).first?.options.first?.start == at(20, 9, 5))
+        #expect(suggest(monday, events: events, ideas: ideas).first?.options.first?.start == at(19, 21))
+        #expect(suggest(at(20, 0), events: events, ideas: ideas).first?.options.first?.start == at(20, 9))
     }
 
     @Test func notNowHidesAnIdeaUntilTheCooldownEnds() {
@@ -222,6 +232,19 @@ struct SuggestionTests {
         #expect(suggest(events: onlyFree(at(19, 13), at(19, 17)), ideas: [hike]).isEmpty)
         let morning = suggest(events: [plan("Lunch", at(19, 12), at(19, 13))], ideas: [hike], now: at(19, 7))
         #expect(morning.first?.options.first?.start == at(19, 8))
+    }
+
+    @Test func aCustomTimeBlockIsAHardLimit() {
+        var guitar = idea("Practice guitar", minutes: 45)
+        guitar.windowStart = 18 * 60
+        guitar.windowEnd = 19 * 60
+        #expect(suggest(ideas: [guitar]).first?.options.first?.start == at(19, 18))
+
+        // 90 minutes can't fit inside a one-hour block, so it's never suggested.
+        var movie = idea("Watch a movie", minutes: 90)
+        movie.windowStart = 18 * 60
+        movie.windowEnd = 19 * 60
+        #expect(suggest(ideas: [movie]).isEmpty)
     }
 
     @Test func somethingAlreadyPlannedThatDayIsNotSuggestedAgain() {
@@ -311,5 +334,62 @@ struct HistoryTests {
         #expect(options.count == 1)
         #expect(options.first?.reason == "From your Ideas · usually in the evening")
         #expect(options.first?.ideaID != nil)
+    }
+}
+
+@Suite("New ideas")
+struct NewIdeaTests {
+    @Test func categoriesAreRecognizedFromTitles() {
+        #expect(IdeaCatalog.category(for: "Go hiking at Stevens Trail") == "Outdoors")
+        #expect(IdeaCatalog.category(for: "Practice guitar") == "Music")
+        #expect(IdeaCatalog.category(for: "Team meeting") == nil)
+        #expect(idea("Sewing class").effectiveCategory == "Creative")
+    }
+
+    @Test func nothingIsSuggestedToSomeoneWithNoIdeasOrHistory() {
+        #expect(suggest(newIdeas: true).isEmpty)
+    }
+
+    @Test func newIdeasComeFromWhatTheUserSaved() {
+        let hike = idea("Hike Stevens Trail", minutes: 15 * 60)  // longer than any free day, so only new ideas show
+        let options = suggest(ideas: [hike], newIdeas: true).flatMap(\.options)
+        #expect(!options.isEmpty)
+        for option in options {
+            #expect(option.isNewIdea)
+            #expect(option.reason == "New idea · because you saved Hike Stevens Trail")
+            #expect(IdeaCatalog.item(forKey: SuggestionEngine.normalized(option.title))?.category == "Outdoors")
+        }
+    }
+
+    @Test func newIdeasRankBelowTheUsersOwnAndNeverRepeatThem() {
+        let ideas = [idea("Go on a bike ride", minutes: 60), idea("Read", minutes: 30)]
+        let options = suggest(ideas: ideas, newIdeas: true).flatMap(\.options)
+        #expect(options.filter { $0.title == "Go on a bike ride" }.allSatisfy { !$0.isNewIdea })
+        for plan in suggest(ideas: ideas, newIdeas: true) {
+            let firstNew = plan.options.firstIndex(where: \.isNewIdea) ?? plan.options.count
+            #expect(plan.options[..<firstNew].allSatisfy { !$0.isNewIdea })
+            #expect(plan.options[firstNew...].allSatisfy { $0.isNewIdea })
+        }
+    }
+
+    @Test func aNewIdeaTheUserTriedCountsAsAnInterest() {
+        let feedback = [SuggestionEngine.newIdeaKey("go for a run"): SuggestionFeedback(accepted: 1)]
+        let interests = SuggestionEngine.interests(ideas: [], habits: [], feedback: feedback)
+        #expect(interests == [SuggestionEngine.Interest(category: "Fitness", because: "because you tried Go for a run")])
+    }
+}
+
+@Suite("Plan times")
+struct PlanTimeTests {
+    @Test func aPlanCanEndAtMidnight() {
+        let day = at(19, 0)
+        let end = PlanTime.end(day: day, start: at(19, 23), endTime: at(19, 0))
+        #expect(end == at(20, 0))
+    }
+
+    @Test func otherEndTimesStayOnTheSameDay() {
+        #expect(PlanTime.end(day: at(19, 0), start: at(19, 9), endTime: at(19, 10)) == at(19, 10))
+        // A real mistake (ending before starting) is still caught.
+        #expect(PlanTime.end(day: at(19, 0), start: at(19, 9), endTime: at(19, 8)) == at(19, 8))
     }
 }

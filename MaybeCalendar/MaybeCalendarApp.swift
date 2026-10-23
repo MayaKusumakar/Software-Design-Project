@@ -29,22 +29,16 @@ struct ContentView: View {
     @State private var tab = AppTab.calendar
     @State private var selectedDay = Date.now
     @State private var focusDate: Date?
-    @State private var focusNewIdea = false
 
     var body: some View {
         TabView(selection: $tab) {
-            CalendarView(selectedDay: $selectedDay, focusDate: $focusDate, onAddIdea: openNewIdea)
+            CalendarView(selectedDay: $selectedDay, focusDate: $focusDate)
                 .tabItem { Label("Calendar", systemImage: "calendar") }
                 .tag(AppTab.calendar)
-            IdeasView(selectedDay: $selectedDay, focusDate: $focusDate, tab: $tab, focusNewIdea: $focusNewIdea)
+            IdeasView(selectedDay: $selectedDay, focusDate: $focusDate, tab: $tab)
                 .tabItem { Label("Ideas", systemImage: "lightbulb") }
                 .tag(AppTab.ideas)
                 .badge(store.ideas.count)
         }
-    }
-
-    private func openNewIdea() {
-        tab = .ideas
-        focusNewIdea = true
     }
 }

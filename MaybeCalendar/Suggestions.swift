@@ -1,6 +1,6 @@
 import Foundation
 
-/// When during the day an idea fits best.
+/// Quick picks for when an idea fits best. The chosen window is stored on the idea in minutes.
 enum BestTime: String, Codable, CaseIterable, Identifiable {
     case any, morning, afternoon, evening
 
@@ -18,13 +18,23 @@ enum BestTime: String, Codable, CaseIterable, Identifiable {
     /// "in the evening", used in suggestion explanations.
     var phrase: String { "in the \(label.lowercased())" }
 
-    /// The hours this covers, as [start, end).
+    /// The hours used to recognize when past plans happened, as [start, end).
     var hours: Range<Int> {
         switch self {
         case .any: 0..<24
         case .morning: 5..<12
         case .afternoon: 12..<17
         case .evening: 17..<24
+        }
+    }
+
+    /// The time window this quick pick gives an idea, in minutes since midnight.
+    var window: Range<Int>? {
+        switch self {
+        case .any: nil
+        case .morning: 8 * 60..<12 * 60
+        case .afternoon: 12 * 60..<17 * 60
+        case .evening: 17 * 60..<22 * 60
         }
     }
 
@@ -50,11 +60,15 @@ struct SuggestionSettings {
     /// Gaps shorter than this aren't worth suggesting anything for.
     var minimumFreeMinutes = 30
     /// Breathing room left before and after existing plans.
-    var bufferMinutes = 5
+    var bufferMinutes = 0
+    /// Suggestions start on the hour or a quarter past, never at odd times like :05.
+    var roundingMinutes = 15
     /// At most this many gaps per day get a suggestion, so free time doesn't fill up with to-dos.
     var maxGaps = 2
     /// How long "Not now" hides an activity: 1 day, then 3, then 7 if dismissed again and again.
     var cooldownDays = [1, 3, 7]
+    /// Also suggest new activities related to what the user has saved.
+    var includeNewIdeas = true
 }
 
 /// An open stretch of time between plans.
@@ -89,6 +103,8 @@ struct Suggestion: Identifiable, Hashable {
     enum Source: Hashable {
         case idea(Idea.ID)
         case habit(String)
+        /// A new activity from `IdeaCatalog`, by its normalized title.
+        case newIdea(String)
     }
 
     var source: Source
@@ -106,11 +122,17 @@ struct Suggestion: Identifiable, Hashable {
         return nil
     }
 
+    var isNewIdea: Bool {
+        if case .newIdea = source { return true }
+        return false
+    }
+
     /// Identifies the activity for feedback, whatever time it's suggested for.
     var key: String {
         switch source {
         case .idea(let id): SuggestionEngine.ideaKey(id)
         case .habit(let key): SuggestionEngine.habitKey(key)
+        case .newIdea(let key): SuggestionEngine.newIdeaKey(key)
         }
     }
 
@@ -131,6 +153,7 @@ struct SlotSuggestions: Identifiable, Hashable {
 enum SuggestionEngine {
     static func ideaKey(_ id: Idea.ID) -> String { "idea:\(id.uuidString)" }
     static func habitKey(_ titleKey: String) -> String { "habit:\(titleKey)" }
+    static func newIdeaKey(_ titleKey: String) -> String { "new:\(titleKey)" }
 
     /// Lowercased words only, so "Evening Walk!" and "evening walk" match.
     static func normalized(_ title: String) -> String {
@@ -147,7 +170,7 @@ enum SuggestionEngine {
         guard let windowStart = calendar.date(bySettingHour: settings.dayStartHour, minute: 0, second: 0, of: day),
               let windowEnd = calendar.date(bySettingHour: settings.dayEndHour, minute: 0, second: 0, of: day)
         else { return [] }
-        let start = max(windowStart, roundUp(now))
+        let start = max(windowStart, roundUp(now, toMinutes: settings.roundingMinutes))
         guard start < windowEnd else { return [] }
 
         // Every plan counts as busy, potential ones included, even ones that started the day before.
@@ -160,7 +183,7 @@ enum SuggestionEngine {
         var slots: [FreeSlot] = []
         func addGap(_ from: Date, _ to: Date, afterPlan: Bool, beforePlan: Bool) {
             guard to.timeIntervalSince(from) >= TimeInterval(settings.minimumFreeMinutes * 60) else { return }
-            let usableStart = roundUp(afterPlan ? from + buffer : from)
+            let usableStart = roundUp(afterPlan ? from + buffer : from, toMinutes: settings.roundingMinutes)
             let usableEnd = beforePlan ? to - buffer : to
             guard usableEnd > usableStart else { return }
             slots.append(FreeSlot(start: from, end: to, usableStart: usableStart, usableEnd: usableEnd))
@@ -183,47 +206,46 @@ enum SuggestionEngine {
         return slots
     }
 
-    /// Rounds up to the next 5 minutes, so suggestions start at tidy times.
-    static func roundUp(_ date: Date) -> Date {
-        let step: TimeInterval = 5 * 60
+    /// Rounds up to the next multiple of `step` minutes, so suggestions start at tidy times.
+    static func roundUp(_ date: Date, toMinutes step: Int = 15) -> Date {
+        let seconds = TimeInterval(max(step, 1) * 60)
         let t = date.timeIntervalSinceReferenceDate
-        return Date(timeIntervalSinceReferenceDate: (t / step).rounded(.up) * step)
+        return Date(timeIntervalSinceReferenceDate: (t / seconds).rounded(.up) * seconds)
     }
 
-    /// The earliest start in `slot` where an activity of `minutes` fits. An explicit best time
-    /// is a hard limit; otherwise the user's usual start time is used when it fits.
-    static func placement(minutes: Int, bestTime: BestTime?, usualStartMinute: Int?,
+    /// `minute` minutes after midnight on `day`; 24:00 is the next midnight.
+    static func date(atMinute minute: Int, on day: Date, calendar: Calendar) -> Date {
+        let dayStart = calendar.startOfDay(for: day)
+        if minute >= 24 * 60 { return calendar.date(byAdding: .day, value: 1, to: dayStart)! }
+        return calendar.date(bySettingHour: minute / 60, minute: minute % 60, second: 0, of: dayStart)!
+    }
+
+    /// The earliest start in `slot` where an activity of `minutes` fits. A time window is a hard
+    /// limit (the whole activity stays inside it); otherwise the user's usual start time is used
+    /// when it fits.
+    static func placement(minutes: Int, window: Range<Int>?, usualStartMinute: Int?,
                           in slot: FreeSlot, calendar: Calendar) -> Date? {
         let length = TimeInterval(minutes * 60)
         var start = slot.usableStart
-        if let bestTime, bestTime != .any {
-            let period = bounds(of: bestTime, on: slot.start, calendar: calendar)
-            start = max(start, period.lowerBound)
-            guard start < period.upperBound else { return nil }
-        } else if let usual = usualStartMinute,
-                  let usualStart = calendar.date(bySettingHour: usual / 60, minute: usual % 60, second: 0, of: slot.start),
-                  usualStart >= slot.usableStart, usualStart + length <= slot.usableEnd {
-            start = usualStart
+        var latestEnd = slot.usableEnd
+        if let window {
+            start = max(start, date(atMinute: window.lowerBound, on: slot.start, calendar: calendar))
+            latestEnd = min(latestEnd, date(atMinute: window.upperBound, on: slot.start, calendar: calendar))
+        } else if let usual = usualStartMinute {
+            let usualStart = date(atMinute: usual, on: slot.start, calendar: calendar)
+            if usualStart >= slot.usableStart, usualStart + length <= slot.usableEnd {
+                start = usualStart
+            }
         }
-        return start + length <= slot.usableEnd ? start : nil
+        return start + length <= latestEnd ? start : nil
     }
 
-    /// The first time on `day` an idea fits, for prefilling the editor.
+    /// The first time on `day` an idea fits, for prefilling the editor and the ideas tray.
     static func firstFit(for idea: Idea, on day: Date, events: [PlanEvent], now: Date,
                          calendar: Calendar = .current) -> Date? {
         freeSlots(on: day, events: events, now: now, calendar: calendar).lazy
-            .compactMap { placement(minutes: idea.effectiveMinutes, bestTime: idea.bestTime, usualStartMinute: nil, in: $0, calendar: calendar) }
+            .compactMap { placement(minutes: idea.effectiveMinutes, window: idea.timeWindow, usualStartMinute: nil, in: $0, calendar: calendar) }
             .first
-    }
-
-    static func bounds(of time: BestTime, on day: Date, calendar: Calendar) -> Range<Date> {
-        let dayStart = calendar.startOfDay(for: day)
-        func at(_ hour: Int) -> Date {
-            hour >= 24
-                ? calendar.date(byAdding: .day, value: 1, to: dayStart)!
-                : calendar.date(bySettingHour: hour, minute: 0, second: 0, of: dayStart)!
-        }
-        return at(time.hours.lowerBound)..<at(time.hours.upperBound)
     }
 
     // MARK: History
@@ -296,22 +318,59 @@ enum SuggestionEngine {
         return sorted.isEmpty ? 0 : sorted[sorted.count / 2]
     }
 
+    // MARK: Interests
+
+    /// A kind of activity the user has shown they like, and the evidence for it.
+    struct Interest: Hashable {
+        var category: String
+        /// Ends the explanation, e.g. "because you saved Hike Stevens Trail".
+        var because: String
+    }
+
+    /// Categories the user has shown interest in, taken only from their own ideas, habits and
+    /// new ideas they've added before. Nothing is assumed about someone with no history.
+    static func interests(ideas: [Idea], habits: [Habit], feedback: [String: SuggestionFeedback]) -> [Interest] {
+        var result: [Interest] = []
+        var seen = Set<String>()
+        func note(_ category: String?, _ because: String) {
+            guard let category, seen.insert(category.lowercased()).inserted else { return }
+            result.append(Interest(category: category, because: because))
+        }
+        for idea in ideas { note(idea.effectiveCategory, "because you saved \(idea.title)") }
+        for habit in habits { note(IdeaCatalog.category(for: habit.title), "because you often plan \(habit.title)") }
+        for (key, entry) in feedback.sorted(by: { $0.key < $1.key }) where entry.accepted > 0 && key.hasPrefix("new:") {
+            if let item = IdeaCatalog.item(forKey: String(key.dropFirst(4))) {
+                note(item.category, "because you tried \(item.title)")
+            }
+        }
+        return result
+    }
+
     // MARK: Ranking
 
-    /// Something that could fill free time: a saved idea, or a habit that isn't already an idea.
+    /// Something that could fill free time: a saved idea, a habit that isn't already an idea, or
+    /// a new idea related to what the user likes.
     struct Candidate {
+        enum Kind { case idea(Idea.ID), habit, newIdea(because: String) }
+
+        var kind: Kind
         var key: String
         var titleKey: String
         var title: String
         var minutes: Int
-        var ideaID: Idea.ID?
-        var bestTime: BestTime?
+        var window: Range<Int>?
         var habit: Habit?
         var createdAt: Date?
         var everScheduled: Bool
+
+        var ideaID: Idea.ID? {
+            if case .idea(let id) = kind { return id }
+            return nil
+        }
     }
 
-    static func candidates(ideas: [Idea], events: [PlanEvent], now: Date, calendar: Calendar) -> [Candidate] {
+    static func candidates(ideas: [Idea], events: [PlanEvent], feedback: [String: SuggestionFeedback],
+                           now: Date, calendar: Calendar, includeNewIdeas: Bool = true) -> [Candidate] {
         let habits = habits(from: events, now: now, calendar: calendar)
         let habitsByKey = Dictionary(uniqueKeysWithValues: habits.map { ($0.key, $0) })
         let scheduled = activityKeys(of: events)
@@ -323,18 +382,29 @@ enum SuggestionEngine {
             // Duplicate ideas are offered once.
             guard !titleKey.isEmpty, seen.insert(titleKey).inserted else { continue }
             result.append(Candidate(
-                key: ideaKey(idea.id), titleKey: titleKey, title: idea.title,
-                minutes: idea.effectiveMinutes, ideaID: idea.id, bestTime: idea.bestTime,
+                kind: .idea(idea.id), key: ideaKey(idea.id), titleKey: titleKey, title: idea.title,
+                minutes: idea.effectiveMinutes, window: idea.timeWindow,
                 habit: habitsByKey[titleKey], createdAt: idea.createdAt,
                 everScheduled: scheduled.contains(ideaKey(idea.id)) || scheduled.contains(titleKey)
             ))
         }
         for habit in habits where seen.insert(habit.key).inserted {
             result.append(Candidate(
-                key: habitKey(habit.key), titleKey: habit.key, title: habit.title,
-                minutes: habit.minutes, ideaID: nil, bestTime: nil, habit: habit,
-                createdAt: nil, everScheduled: true
+                kind: .habit, key: habitKey(habit.key), titleKey: habit.key, title: habit.title,
+                minutes: habit.minutes, window: nil, habit: habit, createdAt: nil, everScheduled: true
             ))
+        }
+        guard includeNewIdeas else { return result }
+        for interest in interests(ideas: ideas, habits: habits, feedback: feedback) {
+            for item in IdeaCatalog.ideas(in: interest.category) {
+                let titleKey = normalized(item.title)
+                guard seen.insert(titleKey).inserted else { continue }
+                result.append(Candidate(
+                    kind: .newIdea(because: interest.because), key: newIdeaKey(titleKey), titleKey: titleKey,
+                    title: item.title, minutes: item.minutes, window: item.window, habit: nil, createdAt: nil,
+                    everScheduled: scheduled.contains(titleKey)
+                ))
+            }
         }
         return result
     }
@@ -352,14 +422,15 @@ enum SuggestionEngine {
         return now < last + TimeInterval(days) * 86_400
     }
 
-    /// Ranked suggestions for the strongest free gaps on `day`, in time order.
+    /// Ranked suggestions for the next free gaps on `day`, in time order.
     static func suggestions(for day: Date, events: [PlanEvent], ideas: [Idea],
                             feedback: [String: SuggestionFeedback], now: Date,
                             calendar: Calendar = .current,
                             settings: SuggestionSettings = .init()) -> [SlotSuggestions] {
         let slots = freeSlots(on: day, events: events, now: now, calendar: calendar, settings: settings)
         guard !slots.isEmpty else { return [] }
-        let candidates = candidates(ideas: ideas, events: events, now: now, calendar: calendar)
+        let candidates = candidates(ideas: ideas, events: events, feedback: feedback, now: now,
+                                    calendar: calendar, includeNewIdeas: settings.includeNewIdeas)
         guard !candidates.isEmpty else { return [] }
 
         let dayStart = calendar.startOfDay(for: day)
@@ -376,20 +447,15 @@ enum SuggestionEngine {
             feedback: feedback, now: now, calendar: calendar, settings: settings
         )
 
-        let plans = slots.compactMap { slot -> SlotSuggestions? in
+        // The soonest free time is the most useful to fill, so the first gaps that have
+        // something fitting get suggestions, in time order.
+        let plans = slots.lazy.compactMap { slot -> SlotSuggestions? in
             let options = candidates
                 .compactMap { suggestion(for: $0, in: slot, context: context) }
                 .sorted { $0.score != $1.score ? $0.score > $1.score : $0.key < $1.key }
             return options.isEmpty ? nil : SlotSuggestions(slot: slot, options: options)
         }
-        return plans
-            .sorted { a, b in
-                a.options[0].score != b.options[0].score
-                    ? a.options[0].score > b.options[0].score
-                    : a.slot.start < b.slot.start
-            }
-            .prefix(settings.maxGaps)
-            .sorted { $0.slot.start < $1.slot.start }
+        return Array(plans.prefix(settings.maxGaps))
     }
 
     private struct RankingContext {
@@ -411,12 +477,17 @@ enum SuggestionEngine {
         if context.sameDay.contains(c.titleKey) || c.ideaID.map({ context.sameDay.contains(ideaKey($0)) }) == true {
             return nil
         }
-        guard let start = placement(minutes: c.minutes, bestTime: c.bestTime,
+        guard let start = placement(minutes: c.minutes, window: c.window,
                                     usualStartMinute: c.habit?.usualStartMinute, in: slot, calendar: calendar)
         else { return nil }
 
-        // Saved ideas come first; habits are inferred, so they start lower.
-        var score = c.ideaID != nil ? 100.0 : 60.0
+        // Saved ideas come first; habits are inferred, and new ideas are only related to what's saved.
+        var score: Double
+        switch c.kind {
+        case .idea: score = 100
+        case .habit: score = 60
+        case .newIdea: score = 45
+        }
         // A time pattern from the user's own history, mentioned only when this time matches it.
         var pattern: String?
 
@@ -451,7 +522,7 @@ enum SuggestionEngine {
                 }
             }
         }
-        if let best = c.bestTime, best != .any { score += 10 }
+        if c.window != nil { score += 10 }
 
         // Prefer activities that use a short break well.
         let usable = slot.usableEnd.timeIntervalSince(slot.usableStart)
@@ -479,18 +550,25 @@ enum SuggestionEngine {
         score += 12 * stableUnit("\(c.key)|\(context.dayLabel)")
 
         let reason: String
-        if c.ideaID != nil {
+        let source: Suggestion.Source
+        switch c.kind {
+        case .idea(let id):
             let detail = pattern.map { "usually \($0)" }
                 ?? ageNote
                 ?? (slot.minutes <= 90 ? "fits your \(slot.minutes)-min break" : nil)
             reason = ["From your Ideas", detail].compactMap { $0 }.joined(separator: " · ")
-        } else {
+            source = .idea(id)
+        case .habit:
             reason = pattern.map { "You often plan this \($0)" }
                 ?? "You've planned this \(c.habit?.count ?? 0) times recently"
+            source = .habit(c.titleKey)
+        case .newIdea(let because):
+            reason = "New idea · \(because)"
+            source = .newIdea(c.titleKey)
         }
 
         return Suggestion(
-            source: c.ideaID.map { .idea($0) } ?? .habit(c.titleKey),
+            source: source,
             title: c.title,
             start: start,
             end: start + TimeInterval(c.minutes * 60),
@@ -514,14 +592,14 @@ enum SuggestionEngine {
     struct Shown: Identifiable, Hashable {
         var suggestion: Suggestion
         var slot: FreeSlot
-        /// How many different activities "Another idea" can step through for this gap.
+        /// How many different activities fit this gap.
         var alternatives: Int
         var id: Date { slot.end }
     }
 
-    /// One suggestion per gap, never the same activity twice in a day. `offsets` counts
-    /// "Another idea" taps per gap.
-    static func shown(_ plans: [SlotSuggestions], offsets: [Date: Int]) -> [Shown] {
+    /// One suggestion per gap, never the same activity twice in a day. `offsets` steps through
+    /// each gap's alternatives.
+    static func shown(_ plans: [SlotSuggestions], offsets: [Date: Int] = [:]) -> [Shown] {
         var used = Set<String>()
         return plans.compactMap { plan in
             let options = plan.options.filter { !used.contains($0.key) }
@@ -538,4 +616,10 @@ func durationText(minutes: Int) -> String {
     let hours = minutes / 60, rest = minutes % 60
     if hours == 0 { return "\(rest) min" }
     return rest == 0 ? "\(hours) hr" : "\(hours) hr \(rest) min"
+}
+
+/// "6:30 PM" for a number of minutes after midnight.
+func clockText(minute: Int) -> String {
+    let date = Calendar.current.date(bySettingHour: (minute / 60) % 24, minute: minute % 60, second: 0, of: .now) ?? .now
+    return date.formatted(date: .omitted, time: .shortened)
 }

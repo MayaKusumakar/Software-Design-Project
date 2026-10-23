@@ -5,12 +5,10 @@ struct IdeasView: View {
     @Binding var selectedDay: Date
     @Binding var focusDate: Date?
     @Binding var tab: AppTab
-    /// Set from the calendar's "Add an idea" button to start typing right away.
-    @Binding var focusNewIdea: Bool
 
     @State private var newIdea = ""
     @State private var editor: EditorRequest?
-    @State private var ideaToEdit: Idea?
+    @State private var ideaEditor: IdeaEditorRequest?
     @FocusState private var newIdeaFocused: Bool
 
     private var trimmed: String { newIdea.trimmingCharacters(in: .whitespaces) }
@@ -28,7 +26,7 @@ struct IdeasView: View {
                             .disabled(trimmed.isEmpty)
                     }
                 } footer: {
-                    Text("Ideas don't have a date. They show up as suggestions when you have free time that fits, or tap Schedule to plan one yourself. Tap an idea to say how long it takes.")
+                    Text("Ideas don't have a date. The calendar suggests them when you have free time that fits. Tap an idea to set how long it takes, when it works best, and a category.")
                 }
 
                 Section("Your ideas") {
@@ -52,13 +50,24 @@ struct IdeasView: View {
                                 .controlSize(.small)
                         }
                         .contentShape(Rectangle())
-                        .onTapGesture { ideaToEdit = idea }
-                        .accessibilityAction(named: "Edit") { ideaToEdit = idea }
+                        .onTapGesture { ideaEditor = .edit(idea) }
+                        .accessibilityAction(named: "Edit") { ideaEditor = .edit(idea) }
                     }
                     .onDelete { store.removeIdeas(at: $0) }
                 }
             }
+            .scrollDismissesKeyboard(.interactively)
             .navigationTitle("Ideas")
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button { ideaEditor = .new } label: { Image(systemName: "plus") }
+                        .accessibilityLabel("New idea with details")
+                }
+                ToolbarItemGroup(placement: .keyboard) {
+                    Spacer()
+                    Button("Done") { newIdeaFocused = false }
+                }
+            }
             .sheet(item: $editor) { request in
                 EventEditorView(request: request) { savedDate in
                     selectedDay = savedDate
@@ -66,34 +75,26 @@ struct IdeasView: View {
                     tab = .calendar
                 }
             }
-            .sheet(item: $ideaToEdit) { idea in
-                IdeaEditorView(idea: idea)
-            }
-            .task(id: focusNewIdea) {
-                guard focusNewIdea else { return }
-                try? await Task.sleep(for: .milliseconds(350))
-                newIdeaFocused = true
-                focusNewIdea = false
+            .sheet(item: $ideaEditor) { request in
+                IdeaEditorView(request: request)
             }
         }
     }
 
-    /// "About 1 hr · Evening · Regular"
+    /// "1 hr · Evening · Outdoors · Regular"
     private func details(for idea: Idea) -> String {
         var parts = [idea.minutes.map { durationText(minutes: $0) } ?? "About \(durationText(minutes: Idea.defaultMinutes))"]
-        if let best = idea.bestTime, best != .any { parts.append(best.label) }
+        if let timing = idea.timingText { parts.append(timing) }
+        if let category = idea.category, !category.isEmpty { parts.append(category) }
         if idea.repeats == true { parts.append("Regular") }
         return parts.joined(separator: " · ")
     }
 
     /// Opens the editor at the first free time on the selected day where the idea fits.
     private func schedule(_ idea: Idea) {
-        if let start = SuggestionEngine.firstFit(for: idea, on: selectedDay, events: store.events, now: .now) {
-            editor = .new(start: start, minutes: idea.effectiveMinutes, title: idea.title, status: .potential, ideaID: idea.id)
-        } else {
-            let start = Calendar.current.date(bySettingHour: EditorRequest.suggestedHour(for: selectedDay), minute: 0, second: 0, of: selectedDay)!
-            editor = .new(start: start, minutes: idea.effectiveMinutes, title: idea.title, status: .potential, ideaID: idea.id)
-        }
+        let start = SuggestionEngine.firstFit(for: idea, on: selectedDay, events: store.events, now: .now)
+            ?? Calendar.current.date(bySettingHour: EditorRequest.suggestedHour(for: selectedDay), minute: 0, second: 0, of: selectedDay)!
+        editor = .new(start: start, minutes: idea.effectiveMinutes, title: idea.title, status: .potential, ideaID: idea.id)
     }
 
     private func add() {

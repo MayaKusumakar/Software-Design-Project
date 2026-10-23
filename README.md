@@ -1,6 +1,6 @@
 # Maybe Calendar
 
-A personal iOS calendar for keeping track of both the plans you've committed to **and** the ones you might do. Tentative plans live on a separate "potential" layer you can show or hide, and a dateless **Ideas** list holds free-time activities until you're ready to put them on the calendar.
+A personal iOS calendar for keeping track of both the plans you've committed to **and** the ones you might do, and for actually making time for the things you want to do. Tentative plans live on a separate "potential" layer you can show or hide, a dateless **Ideas** list holds activities you want to make time for, and **Smart Suggestions** finds your free time and fills it with ideas that fit.
 
 Built natively in Swift with SwiftUI.
 
@@ -27,62 +27,66 @@ xcodebuild -project MaybeCalendar.xcodeproj -scheme MaybeCalendar -destination '
 ```
 
 ### Optional: start with sample data
-To see the app filled in right away, edit the scheme (**Product → Scheme → Edit Scheme… → Run → Arguments**) and add `-demoData` under *Arguments Passed On Launch*. This **replaces** any saved data with a few sample events, ideas, and past evening walks (so Smart Suggestions has some history to learn from). Remove the argument afterwards so your own data isn't overwritten on the next launch.
+To see the app filled in right away, edit the scheme (**Product → Scheme → Edit Scheme… → Run → Arguments**) and add `-demoData` under *Arguments Passed On Launch*. This **replaces** any saved data with a few sample events, ideas, and past evening walks (so Smart Suggestions has some history to learn from). Run it before about 7 PM: suggestions only cover free time between 8 AM and 10 PM that hasn't passed yet. Remove the argument afterwards so your own data isn't overwritten on the next launch.
 
 ## Using the app
 
-The app has two tabs: **Calendar** and **Ideas**.
+The app has two tabs: **Calendar** and **Ideas**. The calendar is built around your free time: it shows suggestions right inside the open gaps of your day, and your saved ideas sit in a tray at the bottom, ready to drag onto a time.
 
 ### Try the core features in one minute
-1. On the **Calendar** tab, tap an empty hour and save an event as **Confirmed**: it appears as a solid block.
-2. Tap another hour, set the status to **Potential**, and save: it appears as a dashed, see-through block.
-3. Tap the **Potential shown** button under the week strip to hide potential plans, then tap it again to bring them back.
-4. Tap the **⊕** on the dashed block to commit to it: it turns solid.
-5. Go to the **Ideas** tab, add an idea, and tap **Schedule**. Save it, and the app jumps back to the calendar with the idea placed as a potential plan.
-6. Add another idea, then go back to the **Calendar** tab. A **Free time idea** card appears at the bottom of the day, suggesting it for a free gap. Tap **Add to Calendar**.
+1. On the **Calendar** tab, look for the yellow dotted blocks in the free gaps of your day. Each one is a suggestion from your saved ideas.
+2. Tap the **+** on a suggestion to add it as a potential (maybe) plan. Tap **Undo** if you change your mind.
+3. Tap a suggestion itself to see everything that fits that free time, including new ideas related to what you've saved.
+4. Open the **Your ideas** tray at the bottom, then press and hold an idea and drag it onto a time.
+5. Press and hold a plan and drag it to move it. Drag its bottom edge to make it longer or shorter.
+6. Tap the **⊕** on a dashed (potential) plan to commit to it: it turns solid.
+7. Swipe the day left or right to change days, or tap the month name to see the whole month or year.
 
 ### Calendar tab
-- **Pick a day** from the week strip at the top. Use the arrows (or swipe the strip) to change weeks, and **Today** to jump back.
-  - A filled dot under a day means it has confirmed plans; a hollow dot means it has potential plans.
-  - The day view opens at the current time for today, or at the first plan for other days.
-- **Add an event:** tap **+** in the top-right, or tap any empty hour in the timeline to start an event at that time.
-- **Edit or delete an event:** tap it. The editor lets you change the title, date, start/end time, status, and notes, and has a **Delete Event** button.
-- **Confirmed vs. potential:** every event has a status.
-  - **Confirmed** events are solid blue blocks.
-  - **Potential** events are transparent with a dashed border.
-- **Commit to a potential plan:** tap the **⊕** button on its block. It becomes confirmed immediately.
-- **Show / hide potential plans:** tap the eye button under the week strip (**Potential shown** / **Potential hidden**). While hidden, it shows how many potential plans are hidden on that day. The setting is remembered.
-- Overlapping events are placed side by side so you can compare options for the same time slot. The editor also warns you when a plan overlaps another one.
+- **Moving around:** use the double arrows **«  »** to change weeks and the single arrows **‹ ›** next to the date to change days. You can also swipe the day sideways. **Today** jumps back. Tap the month name for a **month** and **year** view.
+  - Under each day: a filled dot means confirmed plans, a hollow dot means potential plans, and a yellow dot means there's a free-time idea that fits.
+- **Add a plan:** tap or press and hold an empty time (top half of an hour starts on the hour, bottom half on the half hour). Or use **+ → New Event**.
+- **Edit, move or resize a plan:** tap it to edit. Press and hold it, then drag, to move it. Drag the small handle at its bottom edge to change when it ends.
+- **Confirmed vs. potential:** the editor asks *Is this happening for sure?*
+  - **Confirmed** plans are solid blue blocks.
+  - **Potential** plans (maybes) are see-through with a dashed border. Tap the **⊕** on one when it's happening.
+- **Show / hide potential plans:** tap the eye button. While hidden, it shows how many are hidden that day. The setting is remembered.
+- **Move Back to Ideas:** any potential plan, or plan that came from an idea, has a **Move Back to Ideas** button in its editor.
+- Overlapping plans are placed side by side so you can compare options. The editor tells you when a plan overlaps another one, but still lets you save it.
+- Plans can end at midnight (for example 11 PM–12 AM).
 
 ### Smart Suggestions
-When a day has free time, the calendar suggests something from your own ideas (or something you often plan) that fits it.
-- A **Free time idea** card sits at the bottom of the day view: the activity, its time and length, and a short reason such as *From your Ideas · fits your 60-min break* or *You often plan this in the evening*.
-- The suggested time is marked on the timeline with a faint yellow outline. If two gaps have suggestions, tap the other outline to switch the card to it.
-- **Add to Calendar** opens the event editor with everything filled in as a potential plan. Change anything you like, then tap **Save**.
-- **Another idea** shows a different activity for the same free time.
+The app finds your free time and suggests something you'd actually want to do with it.
+- **On the timeline:** suggestions appear as yellow dotted blocks inside the free gaps, with the activity, its time and length, and a short reason such as *From your Ideas · fits your 60-min break*, *You often plan this in the evening*, or *New idea · because you saved Hike Stevens Trail*.
+- **One-tap add:** the **+** on a suggestion adds it as a potential plan. An **Undo** bar appears for a few seconds.
+- **All the options:** tap a suggestion to open that free time. It lists everything that fits, your own ideas and habits first, then up to three new ideas. Tap **Add**, or tap a row to change its time first. Swipe left for **Not now** (or **Save idea** on a new one). It also says how many of your ideas don't fit, so missing ones aren't a mystery.
 - **Not now** hides that activity for a day. If you keep saying not now, it waits longer (3 days, then a week).
-- Tap the activity's name to open the saved idea. Tap the **⌄** to shrink the card to a small button.
 
 How it picks:
-- **Only real free time.** It looks between 8 AM and 10 PM, skips time that has passed, and counts potential plans as busy. Gaps shorter than 30 minutes are ignored, and 5 minutes are left free before and after other plans.
-- **Only what fits.** An activity is never suggested for a gap it doesn't fit in. Ideas with no length are treated as about an hour.
+- **Only real free time.** It looks between 8 AM and 10 PM, skips time that has passed, and counts potential plans as busy. Gaps shorter than 30 minutes are ignored. Suggestions start on the hour or quarter hour.
+- **Only what fits.** An activity is never suggested for a gap it doesn't fit in, or outside the time block you set for it. Ideas with no length are treated as about an hour.
 - **Your ideas first.** Saved ideas rank above anything learned from history. Ideas you've accepted before, ideas that match your usual times, and ideas that have waited a few weeks get a small boost. Ideas already on that day's calendar are skipped.
-- **Careful with history.** Something counts as a habit only if you planned it on at least 3 different days in the last 2 months, and only if it was clearly free time: scheduled from an idea or suggestion, or saved as potential. Classes, meetings, work and appointments are never suggested.
-- **Not overwhelming.** At most two gaps a day get a suggestion, each with a different activity. Similar ideas take turns from day to day.
-- If there is nothing to suggest from yet, the card invites you to save an idea instead.
+- **Careful with history.** Something counts as a habit only if you planned it on at least 3 different days in the last 2 months, and only if it was clearly free time: scheduled from an idea or suggestion, or saved as potential. Classes, meetings, work and appointments are never suggested. A habit is only suggested at the time of day you usually do it.
+- **New ideas from your interests.** The app recognizes the kind of thing you like from your ideas' categories (or their wording, like "hike" → Outdoors) and suggests a few related activities from a built-in list. It never invents interests: with no ideas or history, it suggests nothing and offers starter ideas instead.
+- **Not overwhelming.** Only the next two free gaps of a day get a suggestion, each with a different activity. Similar ideas take turns from day to day.
 
-### Ideas tab
-- **Add an idea:** type an activity (e.g. "Try the new ramen place") and tap **Add**. Ideas have no date.
-- **Edit an idea:** tap it to set roughly how long it takes, the best time of day (morning, afternoon or evening), and whether you do it regularly. All of these are optional and help Smart Suggestions find the right free time.
-- **Schedule an idea:** tap **Schedule**. The event editor opens with the title filled in and the status set to **Potential**. The time is set to the first free time on the selected day where the idea fits. Adjust it if you like and tap **Save**, and the app switches to the Calendar tab and scrolls to the new plan.
-  - By default the idea is removed from the list once scheduled. Turn on **Keep in my ideas list** for things you do repeatedly; the app remembers this for next time.
+### Ideas
+- **Add an idea:** **+ → New Idea** on the calendar, the **+** in the ideas tray, or type one on the **Ideas** tab and tap **Add**. Ideas have no date.
+- **Ideas tray:** at the bottom of the calendar. Each idea shows how long it takes and where it first fits that day (*Fits 3:30 PM* or *No room this day*). Tap one to schedule it at that time, or press and hold and drag it onto the timeline. Tap **⌄** to shrink the tray to one line.
+- **Edit an idea:** tap it on the **Ideas** tab to set (all optional):
+  - **Takes about:** how long it takes.
+  - **When:** any time, morning, afternoon, evening, or **custom times** (for example 6–8 PM). Suggestions stay inside this window.
+  - **Category:** pick one or type your own. A category is suggested from the title.
+  - **I do this regularly:** keeps the idea in your list after you schedule it.
+  - **Notes.**
+- **Schedule an idea:** tap **Schedule** on the Ideas tab. The editor opens at the first free time that fits. By default the idea leaves the list once scheduled; turn on **Keep in my ideas list** for things you do repeatedly.
 - **Remove an idea:** swipe left on it and tap **Delete**.
 
 ### Saving
-Everything is saved automatically on the device (a JSON file in the app's Documents folder), so your plans are still there after you close and reopen the app. This includes what you accepted or dismissed from Smart Suggestions. Nothing is sent anywhere; suggestions are worked out on the phone.
+Everything is saved automatically on the device (a JSON file in the app's Documents folder), so your plans are still there after you close and reopen the app. This includes what you accepted or dismissed from Smart Suggestions. Nothing is sent anywhere; suggestions are worked out on the phone. Data saved by earlier versions of the app still loads.
 
 ## Running the tests
-In Xcode, press **⌘U** (Product → Test). The tests cover free-time detection (overlaps, buffers, events past midnight, daylight-saving days), ranking, cooldowns, learning from history, and loading data saved by older versions. From the command line:
+In Xcode, press **⌘U** (Product → Test). The 54 tests cover free-time detection (overlaps, events past midnight, daylight-saving days, quarter-hour starts), time blocks, ranking, cooldowns, learning from history, new-idea suggestions, plans ending at midnight, one-tap add and undo, moving and resizing plans, Move Back to Ideas, and loading data saved by older versions. From the command line:
 ```bash
 xcodebuild test -project MaybeCalendar.xcodeproj -scheme MaybeCalendar -destination 'platform=iOS Simulator,name=iPhone 17'
 ```
@@ -92,13 +96,15 @@ xcodebuild test -project MaybeCalendar.xcodeproj -scheme MaybeCalendar -destinat
 | File | What it does |
 | --- | --- |
 | `MaybeCalendar/MaybeCalendarApp.swift` | App entry point and the two-tab layout |
-| `MaybeCalendar/Store.swift` | Data models (`PlanEvent`, `Idea`) and saving/loading |
-| `MaybeCalendar/CalendarView.swift` | Week strip, day timeline, event blocks, overlap layout |
+| `MaybeCalendar/Store.swift` | Data models (`PlanEvent`, `Idea`), saving/loading, add/undo/move actions |
+| `MaybeCalendar/CalendarView.swift` | Week strip, day timeline, suggestions, dragging and resizing plans |
+| `MaybeCalendar/MonthYearView.swift` | Month and year views |
 | `MaybeCalendar/EventEditorView.swift` | Add / edit / delete / schedule-idea form |
-| `MaybeCalendar/IdeasView.swift` | Ideas list |
-| `MaybeCalendar/IdeaEditorView.swift` | View / edit one idea (length, best time, regular) |
-| `MaybeCalendar/Suggestions.swift` | Smart Suggestions engine: free-time detection, habits, ranking |
-| `MaybeCalendar/SuggestionViews.swift` | Suggestion card, timeline outline, and the "save an idea" invite |
+| `MaybeCalendar/IdeasView.swift` | Ideas tab |
+| `MaybeCalendar/IdeaEditorView.swift` | Add / edit one idea (length, time block, category, regular) |
+| `MaybeCalendar/Suggestions.swift` | Smart Suggestions engine: free time, habits, interests, ranking |
+| `MaybeCalendar/IdeaCatalog.swift` | Built-in activities and category recognition for new ideas |
+| `MaybeCalendar/SuggestionViews.swift` | Suggestions on the timeline, the free-time sheet, the ideas tray, Undo |
 | `MaybeCalendarTests/` | Unit tests for the engine and saving |
 
 ## Not included (by design)

@@ -62,6 +62,65 @@ struct StoreTests {
         #expect(!store.suggestions(for: tomorrow).flatMap(\.options).contains { $0.ideaID == guitar.id })
     }
 
+    @Test func oldTimePresetsBecomeTimeBlocks() throws {
+        let saved = """
+        {"ideas":[{"id":"6F1A1E2B-1111-4E7B-9C3A-000000000002","title":"Walk","notes":"","bestTime":"evening"}],
+         "showPotential":true,"events":[]}
+        """
+        try Data(saved.utf8).write(to: fileURL)
+        let store = Store(fileURL: fileURL)
+        #expect(store.ideas.first?.timeWindow == 17 * 60..<22 * 60)
+        #expect(store.ideas.first?.timingText == "Evening")
+    }
+
+    @Test func addingInOneTapCanBeUndone() {
+        let store = Store(fileURL: fileURL)
+        store.addIdea("Read")
+        let read = store.ideas[0]
+        let start = Calendar.current.date(byAdding: .day, value: 1, to: .now)!
+        let undo = store.addPlan(title: read.title, start: start, minutes: 45, ideaID: read.id,
+                                 feedbackKey: SuggestionEngine.ideaKey(read.id))
+        #expect(store.events.count == 1)
+        #expect(store.events[0].status == .potential)
+        #expect(store.ideas.isEmpty)  // it's scheduled now, so it leaves the list
+
+        store.undo(undo)
+        #expect(store.events.isEmpty)
+        #expect(store.ideas.map(\.id) == [read.id])
+        #expect(store.feedback[SuggestionEngine.ideaKey(read.id)] == nil)
+    }
+
+    @Test func regularIdeasStayWhenAdded() {
+        let store = Store(fileURL: fileURL)
+        store.addIdea(Idea(title: "Gym", repeats: true))
+        store.addPlan(title: "Gym", start: .now, minutes: 60, ideaID: store.ideas[0].id)
+        #expect(store.ideas.count == 1)
+    }
+
+    @Test func aPlanCanMoveBackToIdeas() throws {
+        let store = Store(fileURL: fileURL)
+        store.upsert(PlanEvent(title: "Pottery class", start: .now, end: .now + 90 * 60, status: .potential))
+        let id = try #require(store.events.first).id
+        store.moveBackToIdeas(id)
+        #expect(store.events.isEmpty)
+        #expect(store.ideas.first?.title == "Pottery class")
+        #expect(store.ideas.first?.minutes == 90)
+    }
+
+    @Test func movingKeepsTheLengthAndResizingKeepsAMinimum() throws {
+        let store = Store(fileURL: fileURL)
+        let start = Calendar.current.date(bySettingHour: 9, minute: 0, second: 0, of: .now)!
+        store.upsert(PlanEvent(title: "Study", start: start, end: start + 3600, status: .confirmed))
+        let id = try #require(store.events.first).id
+
+        store.moveEvent(id, to: start + 2 * 3600)
+        #expect(store.events[0].start == start + 2 * 3600)
+        #expect(store.events[0].end == start + 3 * 3600)
+
+        store.resizeEvent(id, end: start)  // before it starts
+        #expect(store.events[0].end == store.events[0].start + 15 * 60)
+    }
+
     @Test func deletingAnIdeaClearsItsFeedback() {
         let store = Store(fileURL: fileURL)
         store.addIdea("Read")
