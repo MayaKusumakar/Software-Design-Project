@@ -81,7 +81,7 @@ struct PlanUndo: Identifiable {
 @MainActor
 @Observable
 final class Store {
-    private(set) var events: [PlanEvent] = []
+    private(set) var events: [PlanEvent] = [] { didSet { habitCache = nil } }
     private(set) var ideas: [Idea] = []
     private(set) var feedback: [String: SuggestionFeedback] = [:]
     var showPotential = true { didSet { save() } }
@@ -95,6 +95,12 @@ final class Store {
     }
 
     private let fileURL: URL
+    /// A copy of the last file that loaded fine, used if the main file ever can't be read.
+    private var backupURL: URL { fileURL.deletingPathExtension().appendingPathExtension("backup.json") }
+
+    /// Habits only change when plans do (or a new day starts), so they're worked out once
+    /// and shared by every day on screen.
+    @ObservationIgnored private var habitCache: (day: Date, habits: [Habit])?
 
     init(fileURL: URL = URL.documentsDirectory.appending(path: "maybe-calendar.json")) {
         self.fileURL = fileURL
@@ -244,7 +250,16 @@ final class Store {
     // MARK: Suggestions
 
     func suggestions(for day: Date, now: Date = .now) -> [SlotSuggestions] {
-        SuggestionEngine.suggestions(for: day, events: events, ideas: ideas, feedback: feedback, now: now)
+        SuggestionEngine.suggestions(for: day, events: events, ideas: ideas, feedback: feedback, now: now,
+                                     habits: habits(now: now))
+    }
+
+    private func habits(now: Date) -> [Habit] {
+        let today = Calendar.current.startOfDay(for: now)
+        if let cache = habitCache, cache.day == today { return cache.habits }
+        let habits = SuggestionEngine.habits(from: events, now: now)
+        habitCache = (today, habits)
+        return habits
     }
 
     /// Called only once the user actually saves the suggested plan.
@@ -268,8 +283,31 @@ final class Store {
     // MARK: Persistence
 
     private func load() {
-        guard let data = try? Data(contentsOf: fileURL),
-              let snapshot = try? JSONDecoder().decode(Snapshot.self, from: data) else { return }
+        let files = FileManager.default
+        guard files.fileExists(atPath: fileURL.path) else { return }  // First launch.
+
+        if let snapshot = readSnapshot(at: fileURL) {
+            apply(snapshot)
+            try? files.removeItem(at: backupURL)
+            try? files.copyItem(at: fileURL, to: backupURL)
+            return
+        }
+        // The file is there but can't be read. Never save over it: set it aside, then
+        // fall back to the last copy that loaded fine, if there is one.
+        let stamp = Int(Date.now.timeIntervalSince1970)
+        try? files.moveItem(at: fileURL, to: fileURL.deletingPathExtension().appendingPathExtension("unreadable-\(stamp).json"))
+        if let snapshot = readSnapshot(at: backupURL) {
+            apply(snapshot)
+            save()
+        }
+    }
+
+    private func readSnapshot(at url: URL) -> Snapshot? {
+        guard let data = try? Data(contentsOf: url) else { return nil }
+        return try? JSONDecoder().decode(Snapshot.self, from: data)
+    }
+
+    private func apply(_ snapshot: Snapshot) {
         events = snapshot.events
         ideas = snapshot.ideas
         feedback = snapshot.feedback ?? [:]

@@ -1,4 +1,5 @@
 import SwiftUI
+import TipKit
 
 struct CalendarView: View {
     @Environment(Store.self) private var store
@@ -13,6 +14,7 @@ struct CalendarView: View {
     @State private var confirmCount = 0
     @State private var addCount = 0
     @AppStorage("ideasTrayExpanded") private var trayExpanded = false
+    private let movePlanTip = MovePlanTip()
 
     var body: some View {
         NavigationStack {
@@ -90,6 +92,7 @@ struct CalendarView: View {
 
         VStack(spacing: 0) {
             WeekStrip(selectedDay: $selectedDay, now: now)
+                .dynamicTypeSize(...DynamicTypeSize.xxLarge)
 
             HStack(spacing: 6) {
                 DayStepButton(systemImage: "chevron.left", label: "Previous day") { step(-1) }
@@ -105,6 +108,13 @@ struct CalendarView: View {
             }
             .padding(.horizontal)
             .padding(.vertical, 6)
+            .dynamicTypeSize(...DynamicTypeSize.xxLarge)
+
+            if !visibleEvents.isEmpty {
+                TipView(movePlanTip)
+                    .padding(.horizontal)
+                    .padding(.bottom, 6)
+            }
 
             Divider()
 
@@ -120,9 +130,11 @@ struct CalendarView: View {
                 },
                 onMove: { event, start in
                     withAnimation(.snappy) { store.moveEvent(event.id, to: start) }
+                    movePlanTip.invalidate(reason: .actionPerformed)
                 },
                 onResize: { event, end in
                     withAnimation(.snappy) { store.resizeEvent(event.id, end: end) }
+                    movePlanTip.invalidate(reason: .actionPerformed)
                 },
                 suggestions: shown,
                 onOpenSuggestion: { tapped in openGap = plans.first { $0.id == tapped.id } },
@@ -130,6 +142,8 @@ struct CalendarView: View {
                 onDropIdea: drop,
                 onSwipeDay: step
             )
+            // Hour rows have a fixed height, so text stops growing where it still fits.
+            .dynamicTypeSize(...DynamicTypeSize.xxLarge)
             .overlay(alignment: .top) {
                 if visibleEvents.isEmpty, hiddenCount > 0 || shown.isEmpty {
                     Text(hiddenCount > 0
@@ -163,6 +177,7 @@ struct CalendarView: View {
             .padding(.horizontal)
             .padding(.top, 6)
             .padding(.bottom, 8)
+            .dynamicTypeSize(...DynamicTypeSize.xxLarge)
             .animation(.snappy, value: undo?.id)
             .animation(.snappy, value: trayExpanded)
         }
@@ -462,11 +477,14 @@ struct DayTimeline: View {
             .sequenced(before: DragGesture(minimumDistance: 0))
             .onChanged { value in
                 guard case .second(true, let drag) = value else { return }
+                // A resize already under way wins; one touch never does both.
+                if active?.resizing == true { return }
                 if active?.id != event.id { liftCount += 1 }
                 suppressSwipe = true
                 active = ActiveDrag(id: event.id, offset: drag?.translation.height ?? 0, resizing: false)
             }
             .onEnded { value in
+                guard active?.resizing != true else { return }
                 defer { active = nil }
                 guard case .second(true, let drag?) = value else { return }
                 let start = movedStart(event, by: drag.translation.height)
@@ -475,6 +493,7 @@ struct DayTimeline: View {
     }
 
     private func finishResize(_ event: PlanEvent, by offset: CGFloat) {
+        guard active?.resizing == true else { return }
         defer { active = nil }
         let end = resizedEnd(event, by: offset)
         if end != event.end { onResize(event, end) }
@@ -571,6 +590,8 @@ struct DayTimeline: View {
                     isLifted: drag != nil,
                     onConfirm: { onConfirm(event) },
                     onResizeChanged: { offset in
+                        // A move already under way wins; one touch never does both.
+                        if let active, !active.resizing { return }
                         suppressSwipe = true
                         active = ActiveDrag(id: event.id, offset: offset, resizing: true)
                     },
@@ -680,7 +701,8 @@ struct EventBlock: View {
         Capsule()
             .fill(isPotential ? Color.accentColor.opacity(0.5) : Color.white.opacity(0.7))
             .frame(width: 24, height: 4)
-            .frame(maxWidth: .infinity, minHeight: 14)
+            .frame(maxWidth: .infinity)
+            .frame(height: 14)
             .contentShape(Rectangle())
             .gesture(
                 DragGesture(minimumDistance: 2)

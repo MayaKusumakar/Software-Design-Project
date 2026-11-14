@@ -19,7 +19,7 @@ Built natively in Swift with SwiftUI.
 3. In the toolbar, pick the **MaybeCalendar** scheme and an iPhone simulator (for example **iPhone 17**).
 4. Press **⌘R** (Product → Run). The app builds and launches in the simulator.
 
-To run on a physical iPhone instead, select the **MaybeCalendar** target → **Signing & Capabilities**, choose your Apple ID team, and change the bundle identifier if Xcode asks.
+To run on a physical iPhone instead, select the **MaybeCalendar** target → **Signing & Capabilities** and choose your team. The bundle identifier is `com.mayakusumakar.maybecalendar`; if you build under your own Apple ID, change it to something unique to you. The app is for iPhone only.
 
 Building from the command line also works:
 ```bash
@@ -28,6 +28,8 @@ xcodebuild -project MaybeCalendar.xcodeproj -scheme MaybeCalendar -destination '
 
 ### Optional: start with sample data
 To see the app filled in right away, edit the scheme (**Product → Scheme → Edit Scheme… → Run → Arguments**) and add `-demoData` under *Arguments Passed On Launch*. This **replaces** any saved data with a few sample events, ideas, and past evening walks (so Smart Suggestions has some history to learn from). Run it before about 7 PM: suggestions only cover free time between 8 AM and 10 PM that hasn't passed yet. Remove the argument afterwards so your own data isn't overwritten on the next launch.
+
+This only works in builds run from Xcode (Debug). App Store and TestFlight builds ignore it, so they can never replace someone's data. Add `-hideTips` as well to hide the one-time tip, for example when taking screenshots.
 
 ## Using the app
 
@@ -41,6 +43,8 @@ The app has two tabs: **Calendar** and **Ideas**. The calendar is built around y
 5. Press and hold a plan and drag it to move it. Drag its bottom edge to make it longer or shorter.
 6. Tap the **⊕** on a dashed (potential) plan to commit to it: it turns solid.
 7. Swipe the day left or right to change days, or tap the month name to see the whole month or year.
+
+The first time there are plans on screen, a one-time tip explains how to move and resize them.
 
 ### Calendar tab
 - **Moving around:** use the double arrows **«  »** to change weeks and the single arrows **‹ ›** next to the date to change days. You can also swipe the day sideways. **Today** jumps back. Tap the month name for a **month** and **year** view.
@@ -83,10 +87,13 @@ How it picks:
 - **Remove an idea:** swipe left on it and tap **Delete**.
 
 ### Saving
-Everything is saved automatically on the device (a JSON file in the app's Documents folder), so your plans are still there after you close and reopen the app. This includes what you accepted or dismissed from Smart Suggestions. Nothing is sent anywhere; suggestions are worked out on the phone. Data saved by earlier versions of the app still loads.
+Everything is saved automatically on the device (a JSON file in the app's Documents folder), so your plans are still there after you close and reopen the app. This includes what you accepted or dismissed from Smart Suggestions. Data saved by earlier versions of the app still loads.
+
+- **No backend.** There is no server or account. Nothing is sent anywhere, and suggestions are worked out on the phone. The App Store privacy label is *Data Not Collected*. Deleting the app deletes its data.
+- **Safe if the file is ever damaged.** Each launch keeps a copy of the last file that loaded fine. If the saved file can't be read, the app restores that copy and sets the damaged file aside instead of saving over it.
 
 ## Running the tests
-In Xcode, press **⌘U** (Product → Test). The 54 tests cover free-time detection (overlaps, events past midnight, daylight-saving days, quarter-hour starts), time blocks, ranking, cooldowns, learning from history, new-idea suggestions, plans ending at midnight, one-tap add and undo, moving and resizing plans, Move Back to Ideas, and loading data saved by older versions. From the command line:
+In Xcode, press **⌘U** (Product → Test). The 57 tests cover free-time detection (overlaps, events past midnight, daylight-saving days, quarter-hour starts), time blocks, ranking, cooldowns, learning from history, new-idea suggestions, plans ending at midnight, one-tap add and undo, moving and resizing plans, Move Back to Ideas, loading data saved by older versions, recovering from a damaged save file, and speed with a year of plans. From the command line:
 ```bash
 xcodebuild test -project MaybeCalendar.xcodeproj -scheme MaybeCalendar -destination 'platform=iOS Simulator,name=iPhone 17'
 ```
@@ -105,7 +112,13 @@ xcodebuild test -project MaybeCalendar.xcodeproj -scheme MaybeCalendar -destinat
 | `MaybeCalendar/Suggestions.swift` | Smart Suggestions engine: free time, habits, interests, ranking |
 | `MaybeCalendar/IdeaCatalog.swift` | Built-in activities and category recognition for new ideas |
 | `MaybeCalendar/SuggestionViews.swift` | Suggestions on the timeline, the free-time sheet, the ideas tray, Undo |
+| `MaybeCalendar/AppTips.swift` | The one-time tip about moving plans |
+| `MaybeCalendar/PrivacyInfo.xcprivacy` | Privacy manifest for the App Store: no tracking, no data collected |
 | `MaybeCalendarTests/` | Unit tests for the engine and saving |
+| `AppStore/` | App Store screenshots, listing text, and privacy policy |
+
+## App Store
+The [`AppStore`](AppStore) folder has what App Store Connect asks for: five 6.9" iPhone screenshots, the [listing text](AppStore/listing.md) field by field, and the [privacy policy](AppStore/privacy-policy.md). The project is already set up for submission: iPhone only, a privacy manifest, and the encryption question answered in the build.
 
 ## Not included (by design)
 Shared calendars, invitations, other integrated services, multiple accounts, tasks/to-dos, and recurring events are left out to keep the focus on personal scheduling and tentative plans.

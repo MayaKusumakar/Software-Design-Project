@@ -121,6 +121,62 @@ struct StoreTests {
         #expect(store.events[0].end == store.events[0].start + 15 * 60)
     }
 
+    @Test func anUnreadableFileIsRestoredFromTheLastGoodCopy() throws {
+        let store = Store(fileURL: fileURL)
+        store.addIdea("Read")
+        _ = Store(fileURL: fileURL)  // A normal launch keeps a backup of the good file.
+
+        try Data("not json".utf8).write(to: fileURL)
+        let reopened = Store(fileURL: fileURL)
+        #expect(reopened.ideas.map(\.title) == ["Read"])
+        // The restored data is saved again, so the next launch is normal.
+        #expect(Store(fileURL: fileURL).ideas.map(\.title) == ["Read"])
+    }
+
+    @Test func anUnreadableFileIsNeverSavedOver() throws {
+        let folder = FileManager.default.temporaryDirectory.appending(path: "store-test-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let url = folder.appending(path: "maybe-calendar.json")
+        try Data("not json".utf8).write(to: url)
+
+        let store = Store(fileURL: url)
+        #expect(store.ideas.isEmpty)
+        store.addIdea("New idea")
+
+        let setAside = try FileManager.default.contentsOfDirectory(atPath: folder.path)
+            .filter { $0.contains("unreadable") }
+        #expect(setAside.count == 1)
+        let kept = try Data(contentsOf: folder.appending(path: try #require(setAside.first)))
+        #expect(String(decoding: kept, as: UTF8.self) == "not json")
+    }
+
+    @Test func suggestionsStayFastWithAYearOfPlans() {
+        let store = Store(fileURL: fileURL)
+        let calendar = Calendar.current
+        let today = calendar.startOfDay(for: .now)
+        for day in -365..<0 {
+            let date = calendar.date(byAdding: .day, value: day, to: today)!
+            for (hour, title) in [(9, "Class"), (13, "Work"), (19, "Evening walk")] {
+                let start = calendar.date(bySettingHour: hour, minute: 0, second: 0, of: date)!
+                store.upsert(PlanEvent(title: title, start: start, end: start + 3600,
+                                       status: title == "Evening walk" ? .potential : .confirmed))
+            }
+        }
+        for title in ["Read", "Practice guitar", "Go hiking", "Cook something", "Call a friend"] {
+            store.addIdea(title)
+        }
+
+        // About what the month view asks for at once.
+        let clock = ContinuousClock()
+        let elapsed = clock.measure {
+            for day in 0..<31 {
+                _ = store.suggestions(for: calendar.date(byAdding: .day, value: day, to: today)!)
+            }
+        }
+        print("31 days of suggestions with a year of plans took \(elapsed)")
+        #expect(elapsed < .seconds(2))
+    }
+
     @Test func deletingAnIdeaClearsItsFeedback() {
         let store = Store(fileURL: fileURL)
         store.addIdea("Read")

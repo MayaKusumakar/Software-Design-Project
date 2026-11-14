@@ -370,8 +370,9 @@ enum SuggestionEngine {
     }
 
     static func candidates(ideas: [Idea], events: [PlanEvent], feedback: [String: SuggestionFeedback],
-                           now: Date, calendar: Calendar, includeNewIdeas: Bool = true) -> [Candidate] {
-        let habits = habits(from: events, now: now, calendar: calendar)
+                           now: Date, calendar: Calendar, includeNewIdeas: Bool = true,
+                           habits knownHabits: [Habit]? = nil) -> [Candidate] {
+        let habits = knownHabits ?? Self.habits(from: events, now: now, calendar: calendar)
         let habitsByKey = Dictionary(uniqueKeysWithValues: habits.map { ($0.key, $0) })
         let scheduled = activityKeys(of: events)
         var seen = Set<String>()
@@ -426,11 +427,13 @@ enum SuggestionEngine {
     static func suggestions(for day: Date, events: [PlanEvent], ideas: [Idea],
                             feedback: [String: SuggestionFeedback], now: Date,
                             calendar: Calendar = .current,
-                            settings: SuggestionSettings = .init()) -> [SlotSuggestions] {
+                            settings: SuggestionSettings = .init(),
+                            habits: [Habit]? = nil) -> [SlotSuggestions] {
         let slots = freeSlots(on: day, events: events, now: now, calendar: calendar, settings: settings)
         guard !slots.isEmpty else { return [] }
         let candidates = candidates(ideas: ideas, events: events, feedback: feedback, now: now,
-                                    calendar: calendar, includeNewIdeas: settings.includeNewIdeas)
+                                    calendar: calendar, includeNewIdeas: settings.includeNewIdeas,
+                                    habits: habits)
         guard !candidates.isEmpty else { return [] }
 
         let dayStart = calendar.startOfDay(for: day)

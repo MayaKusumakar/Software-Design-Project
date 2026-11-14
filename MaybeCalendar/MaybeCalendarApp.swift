@@ -1,4 +1,5 @@
 import SwiftUI
+import TipKit
 
 @main
 struct MaybeCalendarApp: App {
@@ -6,9 +7,18 @@ struct MaybeCalendarApp: App {
 
     init() {
         let store = Store()
-        if ProcessInfo.processInfo.arguments.contains("-demoData") {
+        // Only in builds run from Xcode, so a public build can never replace someone's data.
+        #if DEBUG
+        let arguments = ProcessInfo.processInfo.arguments
+        if arguments.contains("-demoData") {
             store.loadDemoData()
         }
+        if arguments.contains("-hideTips") {
+            Tips.hideAllTipsForTesting()
+        }
+        #endif
+        // A single tip, shown once, so there's no need to space tips out.
+        try? Tips.configure([.displayFrequency(.immediate)])
         _store = State(initialValue: store)
     }
 

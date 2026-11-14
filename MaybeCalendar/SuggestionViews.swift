@@ -250,7 +250,7 @@ struct IdeasTray: View {
             HStack(alignment: .firstTextBaseline) {
                 VStack(alignment: .leading, spacing: 1) {
                     Text("Your ideas").font(.headline)
-                    Text(store.ideas.isEmpty ? "Things you want to make time for" : "Drag one onto a time, or tap it")
+                    Text(store.ideas.isEmpty ? "Things you want to make time for" : "Tap one to schedule it, or press and hold, then drag it onto a time")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
