@@ -414,13 +414,18 @@ struct DayTimeline: View {
             .scrollDisabled(active != nil)
             .sensoryFeedback(.impact(weight: .medium), trigger: liftCount)
             .onAppear {
+                var target: (hour: Int, animated: Bool)?
                 if let focusDate {
-                    scroll(proxy, toHour: hour(of: focusDate))
+                    target = (hour(of: focusDate), true)
                     self.focusDate = nil
                 } else if !didInitialScroll {
-                    scroll(proxy, toHour: defaultHour, animated: false)
+                    target = (defaultHour, false)
                 }
                 didInitialScroll = true
+                guard let target else { return }
+                scroll(proxy, toHour: target.hour, animated: target.animated)
+                // iOS 17 and 18 can drop a scroll made before the first layout, so repeat it right after.
+                DispatchQueue.main.async { scroll(proxy, toHour: target.hour, animated: target.animated) }
             }
             .onChange(of: focusDate) { _, newValue in
                 guard let newValue else { return }

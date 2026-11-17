@@ -350,9 +350,13 @@ struct UndoBar: View {
     var body: some View {
         HStack(spacing: 12) {
             Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
-            Text("Added \(undo.title) at \(undo.start.formatted(date: .omitted, time: .shortened))")
-                .font(.subheadline)
-                .lineLimit(1)
+            // Drop the time (it's on the calendar) before cutting off the title.
+            ViewThatFits(in: .horizontal) {
+                Text("Added \(undo.title) at \(undo.start.formatted(date: .omitted, time: .shortened))")
+                Text("Added \(undo.title)")
+            }
+            .font(.subheadline)
+            .lineLimit(1)
             Spacer(minLength: 0)
             Button("Undo", action: onUndo)
                 .font(.subheadline.weight(.semibold))
