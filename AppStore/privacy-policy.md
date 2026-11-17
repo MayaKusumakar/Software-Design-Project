@@ -27,4 +27,4 @@ The app does not collect data from anyone, including children.
 If a future version ever changes this (for example, adding sync between devices), this page will be updated before that version is released, and the date at the top will change.
 
 ## Contact
-Questions about this policy: [your contact email]
+Questions about this policy: [mayakusumakar@gmail.com](mailto:mayakusumakar@gmail.com)
