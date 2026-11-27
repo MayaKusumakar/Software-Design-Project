@@ -14,7 +14,7 @@ Everything to paste into App Store Connect, field by field. Character limits are
 | Primary category | Productivity |
 | Secondary category | Lifestyle |
 | Price | Free |
-| Copyright | 2026 [your name] |
+| Copyright | 2026 Maya Kusumakar |
 | Privacy Policy URL | Link to `AppStore/privacy-policy.md` on GitHub (repo must be public) |
 | Support URL | https://github.com/MayaKusumakar/Software-Design-Project |
 
@@ -59,6 +59,18 @@ Upload in this order from `AppStore/screenshots/`. Apple scales them down for sm
 3. `3-ideas-tray.png`: the ideas tray, showing where each idea fits
 4. `4-month.png`: the month view
 5. `5-ideas.png`: the Ideas list
+
+## Header and Search Results artwork (optional)
+On the version page, open **App Previews and Screenshots → Header and Search Results** and upload from `AppStore/creative/`:
+
+| Tab | File | Size |
+| --- | --- | --- |
+| Header | `header.png` | 3840 × 1646 (21:9) |
+| Search Results | `search.png` | 3840 × 2560 (3:2) |
+
+Both are PNGs with no transparency. The headline ("Plans, maybes, and everything in between") and the day card sit inside Apple's art safe area for each size, so they stay fully visible however the App Store crops the image. The shapes around them are decoration and may be cropped. If App Store Connect offers "Use header asset in search results", leave it off so search uses its own image. These placements show on iOS 27 and later.
+
+The artwork follows Apple's creative asset rules: a short phrase, suitable for 4+, no prices, URLs, awards or Apple devices, and no SF Symbols or emoji (the icons are drawn by hand). The text is English, so add localized versions if the app adds languages.
 
 ## Age rating
 Answer **None** or **No** to every question. The app has no user-generated content shared with others, no messaging, no web browsing, no ads and no purchases. The result should be **4+**.
