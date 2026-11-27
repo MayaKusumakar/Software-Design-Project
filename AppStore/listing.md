@@ -51,8 +51,15 @@ No account, no ads and no tracking. Everything stays on your iPhone, and suggest
 ## Keywords (100)
 planner,schedule,free time,ideas,tentative,plans,habits,suggestions,student,agenda,bucket list
 
-## Screenshots (iPhone 6.9", 1320 × 2868)
-Upload in this order from `AppStore/screenshots/`. Apple scales them down for smaller iPhones.
+## Screenshots
+App Store Connect requires **iPhone with Dynamic Island (medium display)**. Upload the 1206 × 2622 set from `AppStore/screenshots/medium-display/` there, in the order below. Apple scales them for the other iPhone sizes.
+
+The 1320 × 2868 set in `AppStore/screenshots/` is for the optional **iPhone with Dynamic Island (large display)** slot, if App Store Connect shows it. It gives Pro Max phones full-resolution images.
+
+- **iPad, Apple Watch:** not needed. The app is iPhone only and has no Watch app.
+- **iPhone Duo:** optional for now. Apple will require Duo screenshots from April 2027 for apps built with the iOS 27.1 SDK or later.
+
+All screenshots are PNGs with no alpha channel, which Apple requires.
 
 1. `1-day.png`: a day with plans, maybes and suggestions in the free time
 2. `2-free-time.png`: every option for one free gap

@@ -118,7 +118,7 @@ xcodebuild test -project MaybeCalendar.xcodeproj -scheme MaybeCalendar -destinat
 | `AppStore/` | App Store screenshots, listing text, and privacy policy |
 
 ## App Store
-The [`AppStore`](AppStore) folder has what App Store Connect asks for: five 6.9" iPhone screenshots, header and search results artwork in `AppStore/creative`, the [listing text](AppStore/listing.md) field by field, and the [privacy policy](AppStore/privacy-policy.md). The project is already set up for submission: iPhone only, a privacy manifest, and the encryption question answered in the build.
+The [`AppStore`](AppStore) folder has what App Store Connect asks for: five iPhone screenshots (in the required medium-display size, 1206 × 2622, and the large size, 1320 × 2868), header and search results artwork in `AppStore/creative`, the [listing text](AppStore/listing.md) field by field, and the [privacy policy](AppStore/privacy-policy.md). The project is already set up for submission: iPhone only, a privacy manifest, and the encryption question answered in the build.
 
 ## Not included (by design)
 Shared calendars, invitations, other integrated services, multiple accounts, tasks/to-dos, and recurring events are left out to keep the focus on personal scheduling and tentative plans.
